@@ -1,0 +1,35 @@
+# Render blueprint. Create the service with this rather than by hand so the disk mount and the
+# secret placeholders are not something anyone has to remember.
+#
+#   Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# The two keys below are marked `sync: false`, so Render prompts for them on first deploy and
+# never stores them in the repo.
+
+services:
+  - type: web
+    name: ephemeris
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # A run is ~90 seconds of Python holding memory next to the Node server, so the smallest
+    # paid instance is the floor. Free has no persistent disk and sleeps after 15 minutes,
+    # which turns the first question of the day into a cold start on top of a long run.
+    plan: starter
+    region: oregon
+    healthCheckPath: /
+    autoDeploy: false
+    envVars:
+      - key: VIDEO_DB_API_KEY
+        sync: false
+      - key: VIDEODB_COLLECTION_ID
+        sync: false
+      # Optional. Set it and send `x-ask-token` to skip the visitor quota during a live demo.
+      # Leave it unset and nobody bypasses, including you.
+      - key: EPHEMERIS_ASK_TOKEN
+        sync: false
+    disk:
+      # Mounted where `lib/answers.ts` looks for saved runs. Without it every answer is lost on
+      # the next deploy, and the saved-questions panel is permanently empty.
+      name: answers
+      mountPath: /app/data/answers
+      sizeGB: 1

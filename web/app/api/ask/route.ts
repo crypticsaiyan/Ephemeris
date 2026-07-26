@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { ANSWERS_DIR, ROOT, answerId } from "@/lib/answers";
+import { admit } from "@/lib/ratelimit";
 
 /** Runs the real Python agent. Requires the project's .venv, so this works in local
  *  development and anywhere the Python environment is present. The preset answers on
@@ -68,6 +69,15 @@ export async function POST(request: Request) {
     return Response.json({ error: "question too long" }, { status: 400 });
   }
 
+  // Checked after validation, so a malformed request never spends part of someone's quota.
+  const admission = admit(request);
+  if (!admission.ok) {
+    return Response.json(
+      { error: admission.error },
+      { status: admission.status, headers: { "retry-after": String(admission.retryAfter) } },
+    );
+  }
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -75,6 +85,18 @@ export async function POST(request: Request) {
       const send = (event: string, data: unknown) => {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
+
+      // Retrieval and synthesis are the two long silences in a run, and a proxy in front of the
+      // server reads silence as a dead connection. Locally nothing sits in front, so this only
+      // matters once deployed, which is exactly when it is hard to debug. A line starting with
+      // `:` is an SSE comment: it keeps bytes flowing and `EventSource` ignores it.
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          // The stream is already closed; the interval is cleared in `finally`.
+        }
+      }, 15_000);
 
       // The agent writes its result straight into data/answers, alongside the presets, and it
       // stays there. If that directory cannot be created the run still happens: persistence is
@@ -93,7 +115,14 @@ export async function POST(request: Request) {
       try {
         // The question is passed as a separate argv entry, never interpolated into a
         // shell string, and no shell is spawned.
-        const child = spawn(PYTHON, [SCRIPT, question, "--json", outPath], {
+        //
+        // `-P` keeps the script's own directory off sys.path. Without it `scripts/select.py`
+        // shadows the stdlib `select`, and `subprocess` fails to import halfway through, which
+        // takes the whole run down before it starts. It does not reproduce on every machine:
+        // where `select` is compiled into the interpreter it wins regardless, and where it is a
+        // dynamic extension it loses to the sibling file. `ask.py` puts `src/` on the path
+        // itself and imports nothing from `scripts/`, so dropping that entry costs it nothing.
+        const child = spawn(PYTHON, ["-P", SCRIPT, question, "--json", outPath], {
           cwd: ROOT,
           stdio: ["ignore", "ignore", "pipe"],
         });
@@ -141,6 +170,8 @@ export async function POST(request: Request) {
         if (!scratch) await recordFailure(outPath, question, detail);
         send("error", { error: detail });
       } finally {
+        admission.release();
+        clearInterval(heartbeat);
         // Only the fallback scratch directory is cleaned up. A saved answer is the point.
         if (scratch) await rm(scratch, { recursive: true, force: true });
         controller.close();

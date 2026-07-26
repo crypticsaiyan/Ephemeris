@@ -1,0 +1,27 @@
+.git
+.gitignore
+
+# Built inside the image, and copying a host build breaks the one in the container.
+.venv
+__pycache__
+*.pyc
+node_modules
+web/node_modules
+web/.next
+web/.next-check
+web/.tmp-check-*
+web/tsconfig.tsbuildinfo
+
+# Secrets stay in Render's environment, never in a layer.
+.env
+.env.local
+
+# Saved runs are a mounted disk in production, not image content.
+data/answers
+
+# Not needed at runtime.
+docs
+tests
+PLAN.md
+NOTES.md
+SUBMISSION.md
