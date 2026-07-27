@@ -226,6 +226,51 @@ default, and collection-scoped search then fans out over every indexed video in 
 Commands below write `python` for the environment just created. `uv venv` does not activate
 anything, so either `source .venv/bin/activate` first or call `.venv/bin/python` directly.
 
+## Deploying
+
+This branch adds a `Dockerfile` that puts the Python environment and the Next.js server in one
+tree, which is what live asks need: the ask route spawns `<repo>/.venv/bin/python` as a real
+subprocess, so a Node-only host can serve the presets and nothing else.
+
+The image is host-agnostic. `next start` reads `PORT`, which every container host injects, so
+nothing in the `Dockerfile` names a particular provider.
+
+`render.yaml` targets [Render](https://render.com)'s free instance type, which needs no card.
+Deploy it with **New → Blueprint**, pointed at this branch. Hugging Face Spaces is not an option
+any more: the Docker SDK became a paid feature in July 2026, and the free Static SDK cannot run
+either half of this.
+
+[Google Cloud Run](https://cloud.google.com/run) is the better home if a card on file is
+acceptable. Its always-free allowance is far larger than this needs, roughly 1,500 runs a month,
+and it gives real CPU with no idle shutdown.
+
+Whichever host, set three keys as environment secrets:
+
+| Secret | Why |
+|---|---|
+| `VIDEO_DB_API_KEY` | Use the key that **owns** the corpus. A borrowed key degrades exactly as the table above describes, and the deployed demo would compile no evidence reels. |
+| `VIDEODB_COLLECTION_ID` | Never leave it blank; see the note in Setup about the account default. |
+| `EPHEMERIS_ASK_TOKEN` | Optional. Set it and send `x-ask-token` to bypass the visitor quota during a live demo. |
+
+Sizing, measured rather than assumed: a full run peaks at **49 MB** of RSS for the agent and
+**141 MB** for the Next server, so about 190 MB at runtime. Build is the memory-hungry step and
+Spaces runs it on the builder.
+
+A run takes about **two minutes**, which is long enough that a proxy reading silence will hang
+up on it. Two things keep that from happening: the SSE heartbeat in the ask route, and not
+putting a proxy with a shorter ceiling in front (Cloudflare's free tier caps at 100 seconds).
+
+`web/lib/ratelimit.ts` caps visitors at five questions an hour and two runs at once. It is
+protecting the VideoDB credits, not the box: a public ask endpoint spends real money on whatever
+traffic finds it. Do not deploy live asks without it.
+
+Saved runs land in `data/answers`, which is container-local. Free instances cannot mount a disk,
+so those are lost on restart. The presets are baked into the image at build time and survive,
+so the landing page never depends on it.
+
+Render's free instance sleeps after fifteen minutes idle and takes about a minute to wake, which
+lands on top of the two-minute run for the first visitor after a quiet spell.
+
 ## Pipeline
 
 ```bash

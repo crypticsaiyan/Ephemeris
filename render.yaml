@@ -1,0 +1,34 @@
+# Render blueprint. Create the service with this rather than by hand so the instance type and
+# the secret placeholders are not something anyone has to remember.
+#
+#   Render dashboard -> New -> Blueprint -> pick this repo -> branch deploy/free
+#
+# `plan: free` is load-bearing. An earlier version of this file said `starter` and asked for a
+# persistent disk, and a Blueprint deploy quoted a monthly bill for exactly that reason. Free
+# instances cannot mount disks at all, so the disk block is gone rather than commented out.
+
+services:
+  - type: web
+    name: ephemeris
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # 512 MB and 0.1 CPU. A full run was measured at 49 MB RSS for the agent next to 141 MB for
+    # the Next server, so memory is not the tight constraint here; the shared CPU is. The run
+    # spends most of its two minutes waiting on VideoDB rather than computing.
+    plan: free
+    region: oregon
+    healthCheckPath: /
+    autoDeploy: false
+    envVars:
+      - key: VIDEO_DB_API_KEY
+        sync: false
+      - key: VIDEODB_COLLECTION_ID
+        sync: false
+      # Optional. Set it and send `x-ask-token` to skip the visitor quota during a live demo.
+      # Leave it unset and nobody bypasses, including you.
+      - key: EPHEMERIS_ASK_TOKEN
+        sync: false
+
+# No disk. Free instances do not support them, so saved runs in `data/answers` live only as long
+# as the container does. The preset answers are baked into the image at build time and survive
+# every restart, so the landing page is unaffected.

@@ -1,0 +1,28 @@
+.git
+.gitignore
+
+# Built inside the image. Copying a host build in would shadow the one the container makes,
+# and the host .venv points at host paths that do not exist here.
+.venv
+__pycache__
+*.pyc
+node_modules
+web/node_modules
+web/.next
+web/.next-check
+web/.tmp-check-*
+web/tsconfig.tsbuildinfo
+
+# Secrets live in the Space's settings, never in an image layer.
+.env
+.env.local
+
+# Saved runs are written at runtime; shipping local ones would publish whatever was asked here.
+data/answers
+
+# Not needed at runtime.
+docs
+tests
+evals
+PLAN.md
+NOTES.md
