@@ -1,14 +1,14 @@
-/** Saved runs kept in the visitor's own browser.
+/** Saved runs, which the visitor's browser is now the only place to find.
  *
- *  `data/answers` is the server's copy and it is not durable on the deploy this branch targets: a
- *  free instance cannot mount a disk, so every saved run dies with the container, which restarts
- *  on idle. The preset answers survive because they are baked into the image; a question someone
- *  actually asked does not. Ninety seconds of retrieval and synthesis, gone on the next cold start.
+ *  The server used to write every run to `data/answers` and list it back. That copy was never
+ *  durable on the deploy this branch targets: a free instance cannot mount a disk, so it died
+ *  with the container on every idle restart. Keeping both a copy that vanishes and a copy that
+ *  does not meant two histories to reconcile for no gain, so the server's is gone: it writes the
+ *  agent's output to a temp directory, streams it out, and deletes it.
  *
- *  So the browser keeps its own copy. The server still writes its file and still lists it, and
- *  when it has one it wins: it is the same JSON and it is shared with everyone. This is the
- *  fallback that makes a run outlive the box it ran on, for the person who paid the ninety
- *  seconds for it.
+ *  What that costs is sharing. A run is private to the browser that asked for it, there is no URL
+ *  that reopens one for somebody else, and clearing site data clears the history. What it buys is
+ *  that a run belongs to whoever waited the ninety seconds for it, and outlives the box.
  *
  *  Client-only. Every entry point returns an empty result rather than throwing when there is no
  *  `window`, so a server render and a browser with storage disabled behave the same.
@@ -26,14 +26,14 @@ const RUN_PREFIX = "ephemeris.run.";
  *  the budget is a guess about the browser and the error is the browser answering. */
 const MAX_RUNS = 50;
 
-/** A stored run's metadata is what the list needs; the answer itself is fetched only when opened.
+/** A stored run's metadata is what the list needs; the answer itself is read only when opened.
  *  Keeping them apart means rendering the list parses a few KB rather than every answer ever
  *  saved. */
-type IndexRow = SavedAnswer & { local: true };
+type IndexRow = SavedAnswer;
 
-/** An id for a run the server could not save, so there is no server id to reuse. Deliberately the
- *  same shape as `answerId` in `answers.ts`: these ids are shown as filenames and sorted as
- *  strings, and one that read differently would look like a different kind of thing. */
+/** The id a run is stored and sorted under. Timestamp first so that string order is time order,
+ *  which is what the list and the eviction both rely on, with the question slugged after it so an
+ *  id is legible on its own. */
 export function localRunId(question: string, now = new Date()): string {
   const stamp = now.toISOString().slice(0, 19).toLowerCase().replace(/[:.]/g, "-");
   const slug = question
@@ -91,25 +91,26 @@ export function loadRun(id: string): AskResult | null {
   }
 }
 
-/** The two histories as one list, newest first.
+/** A run that died before it produced an answer, shaped like one that did.
  *
- *  The server's row wins on a shared id. It is the same run, and its copy is the one every other
- *  visitor can open too, so preferring it keeps a click meaning the same thing for everyone. A
- *  local row only fills a gap, which on a diskless instance is most of them after a restart.
- *
- *  `total` counts the union rather than the server's files: it drives the "show all" affordance,
- *  and a count that ignored the browser's runs would offer to reveal runs that are already on
- *  screen while hiding ones that are not. */
-export function mergeRuns(
-  server: SavedAnswer[],
-  local: SavedAnswer[],
-  serverTotal = server.length,
-): { rows: SavedAnswer[]; total: number } {
-  const onServer = new Set(server.map((row) => row.id));
-  const extra = local.filter((row) => !onServer.has(row.id));
+ *  The question is the part worth keeping: losing what was typed is exactly the moment someone
+ *  most wants it back, and the agent crashing is not their doing. The server used to write this
+ *  stub itself, which is no longer anywhere it could keep it, so the shape lives here now. The
+ *  empty answer and the explaining caveat are how a refusal already reads, which is why the rest
+ *  of the interface needs no case for it. */
+export function failedRun(question: string, detail: string): AskResult {
   return {
-    rows: [...server, ...extra].sort((a, b) => b.saved.localeCompare(a.saved)),
-    total: serverTotal + extra.length,
+    question,
+    plan: { sub_questions: [], phrasings: [], visual_phrasings: [],
+            needs_chronology: false, rationale: "the run did not complete" },
+    answer: { answer: "", citations: [], chronology: [],
+              caveats: `This run did not complete: ${detail.slice(-400)}` },
+    evidence: [],
+    rejected: { below_threshold: [], diversity: [],
+                counts: { below_threshold: 0, diversity: 0 } },
+    timeline: [],
+    trace: [],
+    failed: true,
   };
 }
 
@@ -118,9 +119,8 @@ function forget(store: Storage, id: string, rows: IndexRow[]): IndexRow[] {
   return rows.filter((row) => row.id !== id);
 }
 
-/** Metadata the list shows, derived here so a local row and a server row read identically.
- *  Mirrors `listAnswers` in `answers.ts`; the two must agree or the same run would describe
- *  itself differently depending on which copy answered. */
+/** Metadata the list shows. Derived from the run itself rather than stored beside it, so a row
+ *  can never disagree with the answer it opens. */
 function describe(id: string, result: AskResult): IndexRow {
   return {
     id,
@@ -130,15 +130,13 @@ function describe(id: string, result: AskResult): IndexRow {
     shots: result.reel?.shots?.length ?? 0,
     answered: Boolean(result.answer?.answer),
     failed: Boolean(result.failed),
-    local: true,
   };
 }
 
 /** Keeps a finished run, evicting the oldest until it fits.
  *
- *  Returns whether it was kept. A false is not worth surfacing: the answer is on screen either
- *  way and the server may well have its own copy. It exists so a caller can tell the difference
- *  without catching. */
+ *  Returns whether it was kept, which the caller has to act on rather than assume: there is no
+ *  copy anywhere else, so a false means this run is gone the moment the page is left. */
 export function saveRun(id: string, result: AskResult): boolean {
   const store = storage();
   if (!store) return false;

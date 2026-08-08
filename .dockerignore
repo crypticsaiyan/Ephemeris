@@ -17,7 +17,8 @@ web/tsconfig.tsbuildinfo
 .env
 .env.local
 
-# Saved runs are written at runtime; shipping local ones would publish whatever was asked here.
+# Local CLI runs and eval fodder. The server never reads or writes this directory, and shipping
+# it would publish whatever was asked here.
 data/answers
 
 # Not needed at runtime.

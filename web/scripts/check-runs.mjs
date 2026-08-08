@@ -1,7 +1,6 @@
 /** Runs kept in the browser.
  *
- *  The free instance has no disk, so `data/answers` is wiped whenever the container restarts and
- *  the browser's copy is the only durable one. That makes eviction the part worth guarding: a
+ *  The browser holds the only copy of a run, so eviction is the part worth guarding: a
  *  store that throws on a full quota loses the run someone just waited ninety seconds for, and a
  *  store that clears itself to make room loses every earlier one instead. Neither failure is
  *  visible in the interface, which shows a list either way.
@@ -91,7 +90,7 @@ function fakeClock() {
 
 async function main() {
   compile();
-  const { listRuns, loadRun, localRunId, mergeRuns, saveRun } = await import(
+  const { failedRun, listRuns, loadRun, localRunId, saveRun } = await import(
     pathToFileURL(join(out, "lib/localRuns.js")).href
   );
 
@@ -108,8 +107,7 @@ async function main() {
   assert.equal(row.moments, 8);
   assert.equal(row.shots, 2);
   assert.equal(row.answered, true);
-  assert.equal(row.local, true);
-  console.log("OK  round trip: a saved run reloads, and lists like a server row");
+  console.log("OK  round trip: a saved run reloads, and the row describes it");
 
   // The server's id is reused on the client, so a run saved twice is one run, not two rows.
   saveRun("run-a", run("water on mars, again"));
@@ -170,34 +168,26 @@ async function main() {
   assert.equal(loadRun("x"), null);
   console.log("OK  storage denied and no window: degrades quietly, never throws");
 
-  // The two histories as one list. The case that matters is a restart: the server has lost the
-  // runs the browser still holds, and every one of them has to come back.
-  const serverRow = (id, saved) => ({ id, question: id, saved, moments: 3, shots: 1,
-                                      answered: true });
-  const localRow = (id, saved) => ({ ...serverRow(id, saved), local: true });
+  // A run that broke still has to leave its question behind. The server used to write this
+  // record; there is nowhere on it that could keep one now, so this is the only copy there is.
+  use(fakeStorage());
+  const broken = failedRun("what broke", "AuthenticationError: Error: Invalid API key");
+  assert.equal(broken.failed, true);
+  assert.equal(broken.answer.answer, "");
+  assert.match(broken.answer.caveats, /did not complete: AuthenticationError/);
+  saveRun("broken", broken);
+  const [brokenRow] = listRuns();
+  assert.equal(brokenRow.failed, true);
+  assert.equal(brokenRow.answered, false);
+  assert.equal(brokenRow.question, "what broke");
+  assert.equal(loadRun("broken").answer.caveats, broken.answer.caveats);
+  console.log("OK  a failed run keeps its question and reads as failed");
 
-  const shared = mergeRuns(
-    [serverRow("b", "2026-08-08T00:00:02Z")],
-    [localRow("a", "2026-08-08T00:00:01Z"), localRow("b", "2026-08-08T00:00:02Z")],
-    1,
-  );
-  assert.deepEqual(shared.rows.map((r) => r.id), ["b", "a"]);
-  assert.equal(shared.rows[0].local, undefined, "the server's row must win on a shared id");
-  assert.equal(shared.rows[1].local, true);
-  assert.equal(shared.total, 2, "the count is the union, not the server's files");
-  console.log("OK  merge: server row wins a shared id, local fills the gaps, newest first");
-
-  const restarted = mergeRuns([], [localRow("a", "2026-08-08T00:00:01Z"),
-                                   localRow("b", "2026-08-08T00:00:02Z")], 0);
-  assert.deepEqual(restarted.rows.map((r) => r.id), ["b", "a"]);
-  assert.equal(restarted.total, 2);
-  console.log("OK  merge: a server that lost everything still leaves the browser's history");
-
-  // Ids are shown as filenames and sorted as strings, so the shape has to match the server's.
+  // Ids sort as strings and are shown to the user, so the shape has to stay time-ordered.
   assert.match(localRunId("Where else did NASA look for water?"),
                /^\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-where-else-did-nasa-look-for-water$/);
   assert.match(localRunId("?!?"), /^\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}$/);
-  console.log("OK  local ids read like the server's");
+  console.log("OK  ids are time-ordered and legible");
 
   restoreClock();
 }

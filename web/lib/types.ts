@@ -138,8 +138,8 @@ export interface Rejected {
   }[];
 }
 
-/** One run saved under `data/answers`. Declared here rather than beside the file-reading code
- *  so a client component can name the type without pulling `node:fs` into the browser bundle. */
+/** One run in the browser's history, as the list needs it. The full answer sits beside it under
+ *  its own key; see `localRuns.ts`. */
 export interface SavedAnswer {
   id: string;
   question: string;
@@ -150,18 +150,13 @@ export interface SavedAnswer {
   /** The run did not complete. Distinct from a run that completed and found nothing to say:
    *  one is a broken pipeline, the other is the archive answering honestly. */
   failed?: boolean;
-  /** Held only by this browser, because the server's copy did not survive its container. Set by
-   *  `localRuns.ts`; absent on anything the server listed. */
-  local?: boolean;
 }
 
 export interface AskResult {
   question: string;
-  /** Written by `/api/ask` when a run died before producing an answer. The question and the
+  /** Built by `failedRun` when a run died before producing an answer. The question and the
    *  reason are kept; every other field is empty. */
   failed?: boolean;
-  /** Set by `/api/ask` on a live run: the id the result was saved under. */
-  saved_id?: string;
   plan: {
     sub_questions: string[];
     phrasings: string[];

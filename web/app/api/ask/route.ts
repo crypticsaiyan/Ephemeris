@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
-import { ANSWERS_DIR, ROOT, answerId } from "@/lib/answers";
+import { ROOT } from "@/lib/answers";
 import { admit } from "@/lib/ratelimit";
 import { redact } from "@/lib/redact";
 
@@ -15,7 +15,13 @@ import { redact } from "@/lib/redact";
  *  The response is an event stream, not one JSON body. A run takes about two minutes, measured,
  *  and the agent writes each reasoning step to stderr as `@progress {json}` the moment it
  *  happens. Forwarding those lets the interface show the loop working rather than a dead
- *  button for that whole time. The final event carries the answer. */
+ *  button for that whole time. The final event carries the answer.
+ *
+ *  The server keeps nothing. The agent needs a file to write its result to, so it gets a temp
+ *  directory that is removed as soon as the answer has been read out to the caller; whoever asked
+ *  is the only one who ends up holding the run, in their own browser. A restart therefore loses
+ *  no history that was ever the server's to lose, which on a diskless free instance is the
+ *  honest arrangement rather than a lesser one. */
 
 export const maxDuration = 300;
 
@@ -23,38 +29,6 @@ const PYTHON = join(ROOT, ".venv", "bin", "python");
 const SCRIPT = join(ROOT, "scripts", "ask.py");
 
 const PROGRESS_PREFIX = "@progress ";
-
-/** Keep the question when the run did not survive to produce an answer.
- *
- *  Shaped like any other saved run so the list and the reload route need no special case: the
- *  answer is empty and the caveat says what went wrong, which is how a refusal already reads. */
-async function recordFailure(outPath: string, question: string, detail: string): Promise<void> {
-  try {
-    await readFile(outPath, "utf8");
-    return; // the agent wrote its own result; the failure was ours, downstream of it
-  } catch {
-    // nothing there, so there is something worth writing
-  }
-  const stub = {
-    question,
-    plan: { sub_questions: [], phrasings: [], visual_phrasings: [],
-            needs_chronology: false, answerable: false, target_body: null,
-            rationale: "the run did not complete" },
-    answer: { answer: "", citations: [], chronology: [],
-              caveats: `This run did not complete: ${detail.slice(-400)}` },
-    evidence: [],
-    rejected: { below_threshold: [], diversity: [],
-                counts: { below_threshold: 0, diversity: 0 } },
-    timeline: [],
-    trace: [],
-    failed: true,
-  };
-  try {
-    await writeFile(outPath, JSON.stringify(stub, null, 2));
-  } catch {
-    // Losing the record of a failure is not worth reporting a second failure over.
-  }
-}
 
 export async function POST(request: Request) {
   let question = "";
@@ -99,19 +73,10 @@ export async function POST(request: Request) {
         }
       }, 15_000);
 
-      // The agent writes its result straight into data/answers, alongside the presets, and it
-      // stays there. If that directory cannot be created the run still happens: persistence is
-      // worth having, not worth failing a two-minute run over.
-      const id = answerId(question, new Date());
-      let outPath: string;
-      let scratch: string | null = null;
-      try {
-        await mkdir(ANSWERS_DIR, { recursive: true });
-        outPath = join(ANSWERS_DIR, `${id}.json`);
-      } catch {
-        scratch = await mkdtemp(join(tmpdir(), "ephemeris-"));
-        outPath = join(scratch, "answer.json");
-      }
+      // Somewhere for the agent to write, and nowhere else. Removed in the `finally` below,
+      // whether or not the run got that far.
+      const scratch = await mkdtemp(join(tmpdir(), "ephemeris-"));
+      const outPath = join(scratch, "answer.json");
 
       try {
         // The question is passed as a separate argv entry, never interpolated into a
@@ -158,28 +123,18 @@ export async function POST(request: Request) {
           throw new Error(errors.trim().slice(-1200) || `agent exited ${exit}`);
         }
 
-        const result = JSON.parse(await readFile(outPath, "utf8"));
-        // The id travels with the answer so the interface can name the file it was saved to,
-        // and reload it later without re-running the agent.
-        send("result", scratch ? result : { ...result, saved_id: id });
+        // The only copy that outlives this request is the one the client is about to keep.
+        send("result", JSON.parse(await readFile(outPath, "utf8")));
       } catch (error) {
         const raw = error instanceof Error ? error.message : String(error);
         // The unredacted text stays on the server, where the host's log is the right place for
-        // absolute paths. Everything below this line is public: the browser gets it, and a
-        // recorded failure is served by `/api/answers/[id]` to whoever asks.
+        // absolute paths. What is sent below is public.
         console.error("[ask] run failed:", raw);
-        const detail = redact(raw);
-        // A run that fails still asked a question, and that question is the part worth keeping:
-        // without this the agent crashing loses what was typed, which is exactly when someone
-        // most wants it back. Written only if the agent left nothing itself, so a real result
-        // is never overwritten by a failure to read it.
-        if (!scratch) await recordFailure(outPath, question, detail);
-        send("error", { error: detail });
+        send("error", { error: redact(raw) });
       } finally {
         admission.release();
         clearInterval(heartbeat);
-        // Only the fallback scratch directory is cleaned up. A saved answer is the point.
-        if (scratch) await rm(scratch, { recursive: true, force: true });
+        await rm(scratch, { recursive: true, force: true });
         controller.close();
       }
     },

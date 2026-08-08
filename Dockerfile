@@ -23,8 +23,8 @@ RUN apt-get update \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
-# Runs as a non-root user. Files copied as root stay readable, but `data/answers` has to be
-# writable by this user or every saved run silently falls back to a temp directory.
+# Runs as a non-root user. Files copied as root stay readable, which is all the agent needs: it
+# writes only to a temp directory of its own making.
 RUN useradd -m -u 1000 user
 
 WORKDIR /app
@@ -46,9 +46,7 @@ COPY web/ web/
 # cleanly and then serves a 404 for every preset on the landing page.
 RUN cd web && pnpm build
 
-# Created here rather than left to the route handler, so the first run is not the thing that
-# discovers the directory is missing.
-RUN mkdir -p /app/data/answers && chown -R user:user /app
+RUN chown -R user:user /app
 
 USER user
 ENV HOME=/home/user \

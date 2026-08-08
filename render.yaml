@@ -29,6 +29,7 @@ services:
       - key: EPHEMERIS_ASK_TOKEN
         sync: false
 
-# No disk. Free instances do not support them, so saved runs in `data/answers` live only as long
-# as the container does. The preset answers are baked into the image at build time and survive
-# every restart, so the landing page is unaffected.
+# No disk, and nothing that wants one. Free instances cannot mount a disk, so the server keeps no
+# history: saved runs live in the visitor's browser and the agent's output is written to a temp
+# directory that is deleted once it has been streamed out. The preset answers are baked into the
+# image at build time and survive every restart, so the landing page is unaffected.

@@ -264,9 +264,12 @@ putting a proxy with a shorter ceiling in front (Cloudflare's free tier caps at 
 protecting the VideoDB credits, not the box: a public ask endpoint spends real money on whatever
 traffic finds it. Do not deploy live asks without it.
 
-Saved runs land in `data/answers`, which is container-local. Free instances cannot mount a disk,
-so those are lost on restart. The presets are baked into the image at build time and survive,
-so the landing page never depends on it.
+Saved runs live in the visitor's browser, in `localStorage`, and the server keeps no history at
+all: the agent writes its result to a temp directory, the route streams it out, and the directory
+is deleted. Free instances cannot mount a disk, so a server-side history would have been lost on
+every restart anyway. The trade is that a run is private to the browser that asked for it and
+there is no URL that reopens one for somebody else. The presets are baked into the image at build
+time, so the landing page never depends on any of this.
 
 Render's free instance sleeps after fifteen minutes idle and takes about a minute to wake, which
 lands on top of the two-minute run for the first visitor after a quiet spell.
