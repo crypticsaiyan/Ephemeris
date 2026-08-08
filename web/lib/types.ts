@@ -150,10 +150,16 @@ export interface SavedAnswer {
   /** The run did not complete. Distinct from a run that completed and found nothing to say:
    *  one is a broken pipeline, the other is the archive answering honestly. */
   failed?: boolean;
+  /** Held only by this browser, because the server's copy did not survive its container. Set by
+   *  `localRuns.ts`; absent on anything the server listed. */
+  local?: boolean;
 }
 
 export interface AskResult {
   question: string;
+  /** Written by `/api/ask` when a run died before producing an answer. The question and the
+   *  reason are kept; every other field is empty. */
+  failed?: boolean;
   /** Set by `/api/ask` on a live run: the id the result was saved under. */
   saved_id?: string;
   plan: {

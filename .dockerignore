@@ -10,7 +10,7 @@ node_modules
 web/node_modules
 web/.next
 web/.next-check
-web/.tmp-check-*
+web/.tmp-*
 web/tsconfig.tsbuildinfo
 
 # Secrets live in the Space's settings, never in an image layer.

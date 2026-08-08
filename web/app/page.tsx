@@ -9,6 +9,7 @@ import { Reel } from "@/components/Reel";
 import { Discarded, Timeline } from "@/components/Sidebar";
 import { Trace } from "@/components/Trace";
 import type { AskResult, SavedAnswer } from "@/lib/types";
+import { listRuns, loadRun, localRunId, mergeRuns, saveRun } from "@/lib/localRuns";
 import { indexReel } from "@/lib/reel";
 import { useStore } from "@/lib/store";
 
@@ -53,16 +54,30 @@ export default function Page() {
   const [savedTotal, setSavedTotal] = useState(0);
 
   const loadSavedList = useCallback(async (limit?: number) => {
+    // The browser's own runs are listed whether or not the server answers. On the free instance
+    // its `data/answers` is wiped by every restart, so this is usually the longer list, and it
+    // is read first so that a server that is slow or gone still leaves a history on screen.
+    const local = listRuns();
+
+    let server: SavedAnswer[] = [];
+    let serverTotal = 0;
     try {
       const query = limit ? `?limit=${limit}` : "";
       const response = await fetch(`/api/answers${query}`, { cache: "no-store" });
-      if (!response.ok) return;
-      const payload = await response.json();
-      setSaved(payload.answers ?? []);
-      setSavedTotal(payload.total ?? payload.answers?.length ?? 0);
+      if (response.ok) {
+        const payload = await response.json();
+        server = payload.answers ?? [];
+        serverTotal = payload.total ?? server.length;
+      }
     } catch {
       // A missing history is not worth an error banner over the answer itself.
     }
+
+    const { rows, total } = mergeRuns(server, local, serverTotal);
+    // The server applies its own default of twelve; the merged list has to be cut to the same
+    // length or asking for the default would quietly return more rows than asking for a limit.
+    setSaved(limit ? rows : rows.slice(0, 12));
+    setSavedTotal(total);
   }, []);
 
   useEffect(() => {
@@ -104,16 +119,26 @@ export default function Page() {
       setBusy(true);
       setError(null);
       setLanded(null);
+      // The server first, so a run opened here is the same bytes anyone else would get. Its copy
+      // goes missing on every restart of a diskless instance, and the browser's copy is what
+      // makes the click still work afterwards. A network failure falls through to it too, which
+      // is why the fetch is not what the error is reported from.
+      let result: AskResult | null = null;
       try {
         const response = await fetch(`/api/answers/${id}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`could not reload "${id}"`);
-        setResult((await response.json()) as AskResult);
-        setPreset("");
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setBusy(false);
+        if (response.ok) result = (await response.json()) as AskResult;
+      } catch {
+        // Reaching the server is optional here.
       }
+      result ??= loadRun(id);
+
+      if (result) {
+        setResult(result);
+        setPreset("");
+      } else {
+        setError(`could not reload "${id}"`);
+      }
+      setBusy(false);
     },
     [setResult],
   );
@@ -194,6 +219,12 @@ export default function Page() {
             const answerResult = data as AskResult;
             setResult(answerResult);
             setPreset("");
+            // Kept in this browser before anything else touches it. The server wrote its own copy
+            // under `saved_id`, and on a diskless instance that copy is the one that will not be
+            // there tomorrow. Reusing its id means the two are recognised as one run rather than
+            // listed twice. Without an id the server had nowhere to write, so this is the only
+            // copy and it is minted here.
+            saveRun(answerResult.saved_id ?? localRunId(q), answerResult);
             setLanded({
               seconds: Math.round((Date.now() - started) / 1000),
               moments: answerResult.evidence?.length ?? 0,
@@ -349,14 +380,21 @@ export default function Page() {
                     const state = row.failed ? "failed" : row.answered ? "answered" : "empty";
                     const note = { answered: `${row.moments} moments`, empty: "nothing found",
                                    failed: "did not finish" }[state];
+                    // A run the server no longer has. Said in the tooltip rather than the row:
+                    // where the copy lives is a fact about the deployment, not about the answer,
+                    // and it only matters at the point someone wonders why it is not shared.
+                    const where = row.local
+                      ? "\nkept in this browser only: the server's copy did not survive a restart"
+                      : "";
                     return (
                       <button
                         key={row.id}
                         className="saved-item"
                         data-state={state}
+                        data-local={row.local ? "" : undefined}
                         disabled={busy}
                         onClick={() => void loadSaved(row.id)}
-                        title={`${row.question}\n${note} · ${new Date(row.saved).toLocaleString()}`}
+                        title={`${row.question}\n${note} · ${new Date(row.saved).toLocaleString()}${where}`}
                       >
                         <span className="saved-q">{row.question}</span>
                         <span className="saved-meta">{note}</span>

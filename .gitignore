@@ -6,7 +6,7 @@ __pycache__/
 node_modules/
 .next/
 tsconfig.tsbuildinfo
-web/.tmp-check-*/
+web/.tmp-*/
 data/answers/
 
 # AI tooling, not part of the project
