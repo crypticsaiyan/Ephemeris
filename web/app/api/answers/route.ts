@@ -21,9 +21,9 @@ export async function GET(request: Request) {
   try {
     return Response.json(await listAnswers(limit));
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 },
-    );
+    // A failure here is a filesystem error, and its message names the answers directory by
+    // absolute path. The caller can do nothing with that; the log can.
+    console.error("[answers] listing failed:", error);
+    return Response.json({ error: "could not read the saved runs" }, { status: 500 });
   }
 }

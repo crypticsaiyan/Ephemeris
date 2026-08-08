@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 import { ANSWERS_DIR, ROOT, answerId } from "@/lib/answers";
 import { admit } from "@/lib/ratelimit";
+import { redact } from "@/lib/redact";
 
 /** Runs the real Python agent. Requires the project's .venv, so this works in local
  *  development and anywhere the Python environment is present. The preset answers on
@@ -162,7 +163,12 @@ export async function POST(request: Request) {
         // and reload it later without re-running the agent.
         send("result", scratch ? result : { ...result, saved_id: id });
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
+        const raw = error instanceof Error ? error.message : String(error);
+        // The unredacted text stays on the server, where the host's log is the right place for
+        // absolute paths. Everything below this line is public: the browser gets it, and a
+        // recorded failure is served by `/api/answers/[id]` to whoever asks.
+        console.error("[ask] run failed:", raw);
+        const detail = redact(raw);
         // A run that fails still asked a question, and that question is the part worth keeping:
         // without this the agent crashing loses what was typed, which is exactly when someone
         // most wants it back. Written only if the agent left nothing itself, so a real result
