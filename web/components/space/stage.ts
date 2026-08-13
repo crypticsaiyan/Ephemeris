@@ -5,32 +5,51 @@ import type { CelestialBody, EventType, Evidence } from "@/lib/types";
  *  pixel. Relative body sizes are kept honest (Earth is 1.9x Mars, the Moon 0.27 of Earth)
  *  because that part costs nothing to get right. */
 
-export const SUN_POSITION = new THREE.Vector3(180, 70, 90);
+export const SUN_POSITION = new THREE.Vector3(86, 70, 88);
 export const SUN_RADIUS = 30;
 
-export const MARS_CENTER = new THREE.Vector3(0, 0, 0);
-export const MARS_RADIUS = 3;
-export const EARTH_CENTER = new THREE.Vector3(-34, 2, -6);
+/* The planets sit on one arc heading away from the Sun, ordered by true heliocentric distance:
+ * Mercury nearest, Saturn farthest, every body in between where it belongs. The earlier layout
+ * ran that arc backwards, putting Mercury farthest from the Sun and Jupiter nearest, which is
+ * the one thing an orrery cannot get wrong.
+ *
+ * Distance from the Sun is `55 + 65*sqrt(au)`, not the AU itself. Linear AU is unusable here:
+ * Saturn is 24x Mercury's orbit, so a frame holding Saturn buries the inner four inside the
+ * Sun's own glow. The square root compresses the outer system while keeping every gap positive,
+ * so the ordering survives the squeeze. Resulting scene distance from the Sun:
+ *
+ *     Mercury  0.39 AU ->  95      Mars     1.52 AU -> 135
+ *     Venus    0.72 AU -> 110      Jupiter  5.20 AU -> 202
+ *     Earth    1.00 AU -> 119      Saturn   9.58 AU -> 255
+ *
+ * The arc also fans sideways as it goes out, because distance alone does not separate them:
+ * Earth and Mars are close enough in compressed distance that on a single sightline their
+ * marker discs would overlap. Sizes stay ranked correctly (Jupiter largest, Mercury smallest)
+ * but compressed too: true relative size would make Mercury invisible next to Jupiter.
+ *
+ * The band is centred near the origin so the single `directionalLight`, which aims from the Sun
+ * at the origin, still lands square on the bodies rather than raking across them. */
+export const MERCURY_CENTER = new THREE.Vector3(18, 4, 88);
+export const MERCURY_RADIUS = 2.1;
+export const VENUS_CENTER = new THREE.Vector3(9.5, -6, 69);
+export const VENUS_RADIUS = 5.3;
+export const EARTH_CENTER = new THREE.Vector3(-0.5, 2, 42);
 export const EARTH_RADIUS = 5.6;
 export const MOON_CENTER = EARTH_CENTER.clone().add(new THREE.Vector3(-11.5, 1.5, 6));
 export const MOON_RADIUS = 1.5;
-export const DEEP_SPACE_CENTER = new THREE.Vector3(44, 18, -78);
-export const UNKNOWN_CENTER = new THREE.Vector3(4, -26, 16);
-
-/* Outer solar system. Laid out along one arc heading away from the Sun so the eye reads an
- * order, with sizes ranked correctly (Jupiter largest, Mercury smallest) but compressed:
- * true relative size would make Mercury invisible next to Jupiter. */
-export const VENUS_CENTER = new THREE.Vector3(-58, -6, 26);
-export const VENUS_RADIUS = 5.3;
-export const MERCURY_CENTER = new THREE.Vector3(-74, 4, 48);
-export const MERCURY_RADIUS = 2.1;
-export const JUPITER_CENTER = new THREE.Vector3(52, 10, -46);
+export const MARS_CENTER = new THREE.Vector3(3.5, 0, 8);
+export const MARS_RADIUS = 3;
+export const JUPITER_CENTER = new THREE.Vector3(-22, 10, -72);
 export const JUPITER_RADIUS = 11;
-export const SATURN_CENTER = new THREE.Vector3(96, -6, -92);
+export const SATURN_CENTER = new THREE.Vector3(-5, -6, -138);
 export const SATURN_RADIUS = 9.2;
 export const TITAN_CENTER = SATURN_CENTER.clone().add(new THREE.Vector3(-17, 3, 9));
 export const TITAN_RADIUS = 1.9;
+
+/* Not places, so not on the arc. Parked clear of every body's marker disc. */
 export const COMET_CENTER = new THREE.Vector3(22, 26, -34);
+export const DEEP_SPACE_CENTER = new THREE.Vector3(44, 18, -78);
+export const UNKNOWN_CENTER = new THREE.Vector3(4, -26, 16);
 
 export interface Stage {
   /** Point the stage orbits or rests on. */
@@ -272,11 +291,14 @@ export function stageCamera(p: Placement): { camPos: THREE.Vector3; lookAt: THRE
   return { camPos, lookAt: p.pos.clone() };
 }
 
-/** Opening wide shot. Framed to hold Mercury through Saturn, so the first thing on screen is the
- *  span of the archive rather than one planet. The camera flies in from here on playback. */
+/** Opening wide shot. Framed to hold the Sun and Mercury through Saturn, so the first thing on
+ *  screen is the span of the archive in its true order rather than one planet. Shot from the
+ *  Sun's side of the arc, looking down it: the far side would frame the same bodies as
+ *  silhouettes, since the only light in the scene is behind them from there.
+ *  The camera flies in from here on playback. */
 export const ESTABLISHING = {
-  camPos: new THREE.Vector3(2, 86, 214),
-  lookAt: new THREE.Vector3(6, 0, -26),
+  camPos: new THREE.Vector3(-64, 170, 298),
+  lookAt: new THREE.Vector3(1, 0, -37),
 };
 
 /* A second camera mode that framed the whole body rather than the moment used to live here.
