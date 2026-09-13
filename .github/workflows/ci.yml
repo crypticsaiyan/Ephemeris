@@ -8,6 +8,8 @@ jobs:
   python:
     name: Python tests
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
     steps:
       - uses: actions/checkout@v4
 
@@ -28,8 +30,6 @@ jobs:
           done
 
       - name: Run pytest tests
-        env:
-          PYTHONPATH: src
         run: |
           pip install pytest
           python -m pytest -q tests || [ $? -eq 5 ]
