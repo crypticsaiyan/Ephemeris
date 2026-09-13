@@ -93,7 +93,10 @@ def _parse(output: Any) -> dict:
             payload = json.loads(text)
         except json.JSONDecodeError:
             match = re.search(r"\{.*\}", text, re.DOTALL)
-            payload = json.loads(match.group(0)) if match else {}
+            try:
+                payload = json.loads(match.group(0)) if match else {}
+            except json.JSONDecodeError:
+                payload = {}
 
     return payload if isinstance(payload, dict) else {}
 
