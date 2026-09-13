@@ -449,7 +449,9 @@ export default function Orrery({
 
   return (
     <Canvas
-      camera={{ position: [-8, 105, 260], fov: 45, near: 0.05, far: 4000 }}
+      // Starts on ESTABLISHING so the first painted frame is already the opening wide shot,
+      // rather than a pose the rig then has to fly out of.
+      camera={{ position: [-64, 170, 298], fov: 45, near: 0.05, far: 4000 }}
       dpr={[1, 1.75]}
       gl={{ antialias: true, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {

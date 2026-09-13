@@ -27,15 +27,24 @@ def load_env() -> None:
 @lru_cache(maxsize=1)
 def connect() -> Connection:
     load_env()
-    if not os.environ.get("VIDEO_DB_API_KEY"):
+    key = (os.environ.get("VIDEO_DB_API_KEY") or "").strip()
+    if not key:
         raise RuntimeError("VIDEO_DB_API_KEY not set. Put it in .env at the project root.")
+    # Hosting dashboards hand back whatever was pasted into the box, newline included, and the
+    # SDK puts this value straight into an Authorization header where a trailing "\n" is a hard
+    # error rather than something the HTTP layer tidies up. The failure surfaces far from its
+    # cause, as an "Invalid request" from the first API call, so normalise it at the source.
+    # Written back to the environment because `videodb.connect()` reads it from there itself.
+    os.environ["VIDEO_DB_API_KEY"] = key
     return videodb.connect()
 
 
 @lru_cache(maxsize=1)
 def get_collection() -> Collection:
     load_env()
-    collection_id = os.environ.get("VIDEODB_COLLECTION_ID")
+    # Stripped for the same reason as the key: a pasted value carries whatever came with it,
+    # and here it would go into a request path instead of a header.
+    collection_id = (os.environ.get("VIDEODB_COLLECTION_ID") or "").strip()
     if not collection_id:
         raise RuntimeError(
             "VIDEODB_COLLECTION_ID not set. Refusing to fall back to the default "

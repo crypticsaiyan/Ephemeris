@@ -138,8 +138,8 @@ export interface Rejected {
   }[];
 }
 
-/** One run saved under `data/answers`. Declared here rather than beside the file-reading code
- *  so a client component can name the type without pulling `node:fs` into the browser bundle. */
+/** One run in the browser's history, as the list needs it. The full answer sits beside it under
+ *  its own key; see `localRuns.ts`. */
 export interface SavedAnswer {
   id: string;
   question: string;
@@ -154,8 +154,9 @@ export interface SavedAnswer {
 
 export interface AskResult {
   question: string;
-  /** Set by `/api/ask` on a live run: the id the result was saved under. */
-  saved_id?: string;
+  /** Built by `failedRun` when a run died before producing an answer. The question and the
+   *  reason are kept; every other field is empty. */
+  failed?: boolean;
   plan: {
     sub_questions: string[];
     phrasings: string[];

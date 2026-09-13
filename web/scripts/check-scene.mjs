@@ -50,7 +50,8 @@ async function main() {
   compile();
   const load = (path) => import(pathToFileURL(join(out, path)).href);
   const { indexReel, evidenceIndexOfShot, shotIndexAt } = await load("lib/reel.js");
-  const { placeEvidence, stageCamera, focusCamera, STAGES } = await load("components/space/stage.js");
+  const { placeEvidence, stageCamera, focusCamera, STAGES, SUN_POSITION, SUN_RADIUS } =
+    await load("components/space/stage.js");
 
   /* 1. Mapping, on a synthetic answer with a hole in it. */
 
@@ -139,6 +140,38 @@ async function main() {
 
     console.log(`OK  placement: ${file} · ${placements.length} moments · ${jumps} stage changes`);
   }
+
+  /* 3. Heliocentric order. Checked because it is invisible in the constants themselves: the
+   *    positions are hand-placed, so nothing but this stops an edit that improves the framing
+   *    from also putting Mercury outside Saturn, which is how the arc came to run backwards. */
+
+  const order = ["mercury", "venus", "earth", "mars", "jupiter", "saturn"];
+  const sunward = order.map((body) => ({
+    body,
+    d: STAGES[body].anchor.distanceTo(SUN_POSITION),
+  }));
+
+  sunward.forEach((cur, i) => {
+    if (i === 0) return;
+    const prev = sunward[i - 1];
+    assert.ok(
+      cur.d > prev.d,
+      `${cur.body} sits ${cur.d.toFixed(0)} from the Sun, inside ${prev.body} at ${prev.d.toFixed(0)}`,
+    );
+    // Bodies must also read as separate at their own scale, or a correct order still looks
+    // like one clump. Measured against the pair's radii, not a flat number, since Jupiter and
+    // Saturn need far more room than Mercury and Venus.
+    const gap = STAGES[cur.body].anchor.distanceTo(STAGES[prev.body].anchor);
+    const touching = STAGES[cur.body].surface + STAGES[prev.body].surface;
+    assert.ok(gap > touching * 2, `${prev.body} and ${cur.body} crowd each other: ${gap.toFixed(0)}`);
+  });
+
+  // Nothing is swallowed by the Sun it orbits.
+  sunward.forEach(({ body, d }) => {
+    assert.ok(d > SUN_RADIUS + STAGES[body].surface, `${body} is inside the Sun`);
+  });
+
+  console.log(`OK  order: ${sunward.map((s) => `${s.body} ${s.d.toFixed(0)}`).join(" · ")}`);
 }
 
 try {

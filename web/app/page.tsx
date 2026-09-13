@@ -9,6 +9,7 @@ import { Reel } from "@/components/Reel";
 import { Discarded, Timeline } from "@/components/Sidebar";
 import { Trace } from "@/components/Trace";
 import type { AskResult, SavedAnswer } from "@/lib/types";
+import { failedRun, listRuns, loadRun, localRunId, saveRun } from "@/lib/localRuns";
 import { indexReel } from "@/lib/reel";
 import { useStore } from "@/lib/store";
 
@@ -46,27 +47,26 @@ export default function Page() {
   // run landed.
   const [landed, setLanded] = useState<{ seconds: number; moments: number; id?: string } | null>(null);
   const answerRef = useRef<HTMLElement | null>(null);
-  // Runs saved to data/answers. Reloading one costs a file read instead of ninety seconds.
+  // Runs this browser kept. Reopening one is a `JSON.parse` instead of ninety seconds, and there
+  // is nowhere else to look: the server keeps no history of its own.
   const [saved, setSaved] = useState<SavedAnswer[]>([]);
   // How many exist, which is not how many are listed: the rest are one click away rather than
   // lost. A question asked is kept whether or not the run that answered it succeeded.
   const [savedTotal, setSavedTotal] = useState(0);
 
-  const loadSavedList = useCallback(async (limit?: number) => {
-    try {
-      const query = limit ? `?limit=${limit}` : "";
-      const response = await fetch(`/api/answers${query}`, { cache: "no-store" });
-      if (!response.ok) return;
-      const payload = await response.json();
-      setSaved(payload.answers ?? []);
-      setSavedTotal(payload.total ?? payload.answers?.length ?? 0);
-    } catch {
-      // A missing history is not worth an error banner over the answer itself.
-    }
+  // Synchronous, but called from effects and handlers rather than during render: reading
+  // localStorage while rendering would make the server's HTML and the browser's first paint
+  // disagree, which React reports as a hydration error.
+  const loadSavedList = useCallback((limit?: number) => {
+    const rows = listRuns();
+    // Twelve is what the list showed before any of this was local, and it is still the point at
+    // which the gutter stops being a glance and starts being a page.
+    setSaved(limit ? rows.slice(0, limit) : rows.slice(0, 12));
+    setSavedTotal(rows.length);
   }, []);
 
   useEffect(() => {
-    void loadSavedList();
+    loadSavedList();
   }, [loadSavedList]);
 
   useEffect(() => {
@@ -99,23 +99,23 @@ export default function Page() {
     void loadPreset("water-mars");
   }, [loadPreset]);
 
+  // No request: the run never left this browser. Nothing here can be slow, so `busy` is not
+  // touched either, and the answer swaps in the moment the row is clicked.
   const loadSaved = useCallback(
-    async (id: string) => {
-      setBusy(true);
+    (id: string) => {
       setError(null);
       setLanded(null);
-      try {
-        const response = await fetch(`/api/answers/${id}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`could not reload "${id}"`);
-        setResult((await response.json()) as AskResult);
+      const result = loadRun(id);
+      if (result) {
+        setResult(result);
         setPreset("");
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setBusy(false);
+      } else {
+        // Storage cleared in another tab, or a row that outlived the answer it names.
+        setError(`this browser no longer holds "${id}"`);
+        loadSavedList();
       }
     },
-    [setResult],
+    [loadSavedList, setResult],
   );
 
   // Bring the new answer to the eye. The left column scrolls independently and the sheet is
@@ -194,20 +194,29 @@ export default function Page() {
             const answerResult = data as AskResult;
             setResult(answerResult);
             setPreset("");
+            // Kept before anything else touches it. The server deleted its temp copy the moment
+            // it finished streaming this, so a failure to store here is the run being lost.
+            const id = localRunId(q);
             setLanded({
               seconds: Math.round((Date.now() - started) / 1000),
               moments: answerResult.evidence?.length ?? 0,
-              id: answerResult.saved_id,
+              id: saveRun(id, answerResult) ? id : undefined,
             });
             answered = true;
-            void loadSavedList();
+            loadSavedList();
           }
         }
       }
 
       if (!answered) throw new Error("the agent produced no answer");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const detail = e instanceof Error ? e.message : String(e);
+      setError(detail);
+      // A run that fails still asked a question, and that question is the part worth keeping.
+      // The server used to write this record itself; it has nowhere to keep one now, so the
+      // browser does it or nobody does.
+      saveRun(localRunId(q), failedRun(q, detail));
+      loadSavedList();
     } finally {
       setBusy(false);
     }
@@ -330,11 +339,16 @@ export default function Page() {
             {!busy && landed && (
               <div className="landed-note">
                 answered in {landed.seconds}s · {landed.moments} moments · reel compiled
-                {landed.id && <span className="landed-file"> · saved as {landed.id}.json</span>}
+                {/* Absent when the browser refused to store it, which is the one case where
+                    leaving the page loses the run. Better said here than discovered later. */}
+                <span className="landed-file">
+                  {landed.id ? " · kept in this browser" : " · not saved: this browser is full"}
+                </span>
               </div>
             )}
 
-            {/* Every live run is kept, so a question asked once never has to be paid for twice. */}
+            {/* Every live run is kept, so a question asked once never has to be paid for twice.
+                Kept here, in this browser: there is no copy on the server to fall back to. */}
             {saved.length > 0 && (
               <div className="saved-row">
                 {/* Short enough to sit in the gutter beside "Ask" and "Start". The count lives
@@ -355,7 +369,7 @@ export default function Page() {
                         className="saved-item"
                         data-state={state}
                         disabled={busy}
-                        onClick={() => void loadSaved(row.id)}
+                        onClick={() => loadSaved(row.id)}
                         title={`${row.question}\n${note} · ${new Date(row.saved).toLocaleString()}`}
                       >
                         <span className="saved-q">{row.question}</span>
@@ -367,7 +381,7 @@ export default function Page() {
                     <button
                       className="saved-item saved-more"
                       disabled={busy}
-                      onClick={() => void loadSavedList(500)}
+                      onClick={() => loadSavedList(500)}
                     >
                       <span className="saved-q">show all {savedTotal}</span>
                       <span className="saved-meta">{savedTotal - saved.length} more</span>
