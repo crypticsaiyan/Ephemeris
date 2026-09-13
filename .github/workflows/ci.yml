@@ -27,6 +27,13 @@ jobs:
             python "$f"
           done
 
+      - name: Run pytest tests
+        env:
+          PYTHONPATH: src
+        run: |
+          pip install pytest
+          python -m pytest -q tests || [ $? -eq 5 ]
+
   web:
     name: Web tests
     runs-on: ubuntu-latest
