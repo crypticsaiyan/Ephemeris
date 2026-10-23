@@ -187,21 +187,31 @@ each from a failure seen in a real run: `cited`, `grounded`, `on_setting`, `snap
 ```bash
 python evals/run.py                        # retrieval gate
 python evals/answers.py data/answers       # answer gate
-python tests/test_era.py                   # and six more suites
+python tests/test_era.py                   # and seven more suites
 cd web && npm test                         # scene placement, craft mapping
 ```
 
 ## Setup
 
-Python 3.12 and Node 20 or newer. The web server spawns the agent from `.venv` at the project
-root, so that path is not interchangeable with a conda environment or a venv named otherwise.
+Python 3.12 and Node 20 or newer. Two processes: the ask service runs the agent, and the web
+app serves the page and forwards questions to it.
 
 ```bash
 uv venv .venv --python 3.12
 uv pip install --python .venv -r requirements.txt
 cp .env.example .env                       # then add your own VideoDB key
-cd web && pnpm install && pnpm dev         # http://localhost:3000
+ASK_SERVICE_TOKEN=dev .venv/bin/python -P src/ask_service.py    # http://localhost:8000
 ```
+
+In a second terminal, give the web app the same token and the service's address, then start it:
+
+```bash
+cd web
+printf 'ASK_SERVICE_URL=http://localhost:8000\nASK_SERVICE_TOKEN=dev\n' > .env.local
+pnpm install && pnpm dev                   # http://localhost:3000
+```
+
+The presets on the landing page need neither the service nor a key; only live asks do.
 
 `.env.example` carries the collection id, because the corpus is public and any key can search it.
 Measured against a second account, that sharing covers retrieval and nothing else:
@@ -228,51 +238,55 @@ anything, so either `source .venv/bin/activate` first or call `.venv/bin/python`
 
 ## Deploying
 
-This branch adds a `Dockerfile` that puts the Python environment and the Next.js server in one
-tree, which is what live asks need: the ask route spawns `<repo>/.venv/bin/python` as a real
-subprocess, so a Node-only host can serve the presets and nothing else.
+Two deployments, because the two halves want different hosts.
 
-The image is host-agnostic. `next start` reads `PORT`, which every container host injects, so
-nothing in the `Dockerfile` names a particular provider.
+**The web app** is a plain Next.js project under `web/`. It runs on a Node host; the live one is on
+[Vercel](https://vercel.com) with `web` as the project's root directory, which gives every pull
+request a preview URL of its own. The presets are copied into `public/answers` at build time by
+`sync-answers.mjs`, so the landing page is complete with no backend at all. Live asks need two
+environment variables:
 
-`render.yaml` targets [Render](https://render.com)'s free instance type, which needs no card.
-Deploy it with **New → Blueprint**, pointed at this branch. Hugging Face Spaces is not an option
-any more: the Docker SDK became a paid feature in July 2026, and the free Static SDK cannot run
-either half of this.
+| Variable | Why |
+|---|---|
+| `ASK_SERVICE_URL` | Where the ask service answers, without a trailing slash. |
+| `ASK_SERVICE_TOKEN` | Shared secret the route sends as `x-service-token`. Unset, the route answers 503 and spends nothing. |
+| `EPHEMERIS_ASK_TOKEN` | Optional. Set it and send `x-ask-token` to bypass the visitor quota during a live demo or an automated test run. |
 
-[Google Cloud Run](https://cloud.google.com/run) is the better home if a card on file is
-acceptable. Its always-free allowance is far larger than this needs, roughly 1,500 runs a month,
-and it gives real CPU with no idle shutdown.
-
-Whichever host, set three keys as environment secrets:
+**The ask service** is `src/ask_service.py`, the Python agent behind one endpoint, built by the
+`Dockerfile`. `render.yaml` targets [Render](https://render.com)'s free instance type, which needs
+no card: deploy it with **New → Blueprint**, pointed at `main`. The image is host-agnostic and
+reads `PORT`, so [Google Cloud Run](https://cloud.google.com/run) works the same way if a card on
+file is acceptable; its always-free allowance covers roughly 1,500 runs a month with no idle
+shutdown. The service needs:
 
 | Secret | Why |
 |---|---|
 | `VIDEO_DB_API_KEY` | Use the key that **owns** the corpus. A borrowed key degrades exactly as the table above describes, and the deployed demo would compile no evidence reels. |
 | `VIDEODB_COLLECTION_ID` | Never leave it blank; see the note in Setup about the account default. |
-| `EPHEMERIS_ASK_TOKEN` | Optional. Set it and send `x-ask-token` to bypass the visitor quota during a live demo. |
+| `ASK_SERVICE_TOKEN` | The same value the web app holds. Unset, the service refuses every ask. |
 
-Sizing, measured rather than assumed: a full run peaks at **49 MB** of RSS for the agent and
-**141 MB** for the Next server, so about 190 MB at runtime. Build is the memory-hungry step and
-Spaces runs it on the builder.
+The browser never reaches the service directly: only the web route holds the token, and the
+visitor quota in `web/lib/ratelimit.ts` sits in front of it, five questions an hour and two runs
+at once. It is protecting the VideoDB credits, not the box: a public ask endpoint spends real
+money on whatever traffic finds it. Do not deploy live asks without it.
 
 A run takes about **two minutes**, which is long enough that a proxy reading silence will hang
-up on it. Two things keep that from happening: the SSE heartbeat in the ask route, and not
-putting a proxy with a shorter ceiling in front (Cloudflare's free tier caps at 100 seconds).
+up on it. The service writes an SSE comment every fifteen seconds and the route passes the bytes
+through untouched, so nothing in between sees a dead connection. The route's `maxDuration` is
+300 seconds for the same reason. Sizing, measured rather than assumed: a full run peaks at
+**49 MB** of RSS for the agent, so two at once fit a 512 MB free instance with room to spare.
 
-`web/lib/ratelimit.ts` caps visitors at five questions an hour and two runs at once. It is
-protecting the VideoDB credits, not the box: a public ask endpoint spends real money on whatever
-traffic finds it. Do not deploy live asks without it.
-
-Saved runs live in the visitor's browser, in `localStorage`, and the server keeps no history at
-all: the agent writes its result to a temp directory, the route streams it out, and the directory
-is deleted. Free instances cannot mount a disk, so a server-side history would have been lost on
-every restart anyway. The trade is that a run is private to the browser that asked for it and
-there is no URL that reopens one for somebody else. The presets are baked into the image at build
-time, so the landing page never depends on any of this.
+Saved runs live in the visitor's browser, in `localStorage`, and neither server keeps any
+history: the agent writes its result to a temp directory, the service streams it out, and the
+directory is deleted. The trade is that a run is private to the browser that asked for it and
+there is no URL that reopens one for somebody else.
 
 Render's free instance sleeps after fifteen minutes idle and takes about a minute to wake, which
-lands on top of the two-minute run for the first visitor after a quiet spell.
+lands on top of the two-minute run for the first live ask after a quiet spell. The landing page
+is unaffected, because it never touches the service.
+
+The earlier single-container deployment, with the Next server spawning the agent in one tree, is
+kept on the `deploy/free` branch so its link keeps working.
 
 ## Pipeline
 
