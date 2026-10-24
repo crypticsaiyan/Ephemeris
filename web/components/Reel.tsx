@@ -31,7 +31,16 @@ export function Reel({ reel }: { reel?: ReelData }) {
     } else {
       let cancelled = false;
       import("hls.js").then(({ default: Hls }) => {
-        if (cancelled || !Hls.isSupported()) return;
+        if (cancelled) return;
+        // No Media Source Extensions, or no H.264 decoder behind them: hls.js has nothing to
+        // feed the element and would stay silent. The spinner used to spin forever here.
+        if (!Hls.isSupported()) {
+          setStreamError(
+            "This browser cannot play the reel: it has no HLS or H.264 support. " +
+            "The shots below still select their moments, and the compiled reel plays at its VideoDB link.",
+          );
+          return;
+        }
         const hls = new Hls({ enableWorker: true });
         hls.loadSource(url);
         hls.attachMedia(video);
@@ -146,7 +155,14 @@ export function Reel({ reel }: { reel?: ReelData }) {
       <div className="player">
         <video ref={videoRef} controls playsInline preload="metadata" />
         {!ready && !streamError && <div className="spinner">loading stream…</div>}
-        {streamError && <div className="err stream-err">{streamError}</div>}
+        {streamError && (
+          <div className="err stream-err" role="alert">
+            {streamError}{" "}
+            <a href={url} target="_blank" rel="noreferrer">
+              open stream
+            </a>
+          </div>
+        )}
       </div>
 
       <div className="shotlist">
