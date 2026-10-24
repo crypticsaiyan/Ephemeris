@@ -201,7 +201,7 @@ Three layers, each catching what the one below cannot.
 
 **Web checks** (`web/scripts/`, run by CI): scene placement for every celestial body, craft mapping, and the browser-side run store.
 
-**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 18 tests:
+**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 18 browser tests:
 
 | Area | What is asserted |
 |---|---|
@@ -213,6 +213,8 @@ Three layers, each catching what the one below cannot.
 | Ask form | Empty input keeps submit disabled; a question past 400 characters is refused on the page before any request |
 | Saved runs | The Asked list shows its empty state in a fresh browser |
 | Live ask | One real question goes through the ask service: running state, progress trace, an answer with chronology and evidence, saved to the browser, survives a reload, reopens without rerunning |
+
+**TestSprite API suite, on every pull request.** A second project, planned from [`docs/openapi.yaml`](docs/openapi.yaml) and probes of the live API, runs against the API itself, 7 tests: a valid question streams `progress` events then one `result`; empty, whitespace-only and over-length questions are refused with the documented 400 bodies before any work; whitespace is trimmed; each preset file returns the `AskResult` shape and an unknown preset returns 404; the body facts file is well-formed.
 
 The live-ask test is the only one that spends VideoDB credits, and the visitor quota in `web/lib/ratelimit.ts` bounds it. The first run of this suite found four real gaps, fixed in the same pull request that carried the red check: body names over the orrery were not click targets, an over-limit question was only refused by the server, the Asked list disappeared when empty, and a browser without H.264 support sat on a spinner forever.
 
