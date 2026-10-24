@@ -201,7 +201,7 @@ Three layers, each catching what the one below cannot.
 
 **Web checks** (`web/scripts/`, run by CI): scene placement for every celestial body, craft mapping, and the browser-side run store.
 
-**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 18 browser tests:
+**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 17 browser tests:
 
 | Area | What is asserted |
 |---|---|
@@ -210,7 +210,7 @@ Three layers, each catching what the one below cannot.
 | Evidence list | Rows render earliest era first; clicking a row changes the active moment and seeks the reel |
 | Evidence reel | The player loads the HLS stream, or says that the stream is slow or that the browser cannot decode it, with a link; a bare spinner is a failure |
 | Orrery | Clicking a body's name focuses it and opens the body panel with its counts; the sidebar shows the era range and the four provenance kinds |
-| Ask form | Empty input keeps submit disabled; a question past 400 characters is refused on the page before any request |
+| Ask form | Empty input keeps submit disabled. The over-limit refusal is checked by the API suite below; typing 400+ characters is too slow for the browser runner to assert reliably, so the page-side note is verified headless instead (see PR #11) |
 | Saved runs | The Asked list shows its empty state in a fresh browser |
 | Live ask | One real question goes through the ask service: running state, progress trace, an answer with chronology and evidence, saved to the browser, survives a reload, reopens without rerunning |
 
