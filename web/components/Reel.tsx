@@ -12,12 +12,25 @@ export function Reel({ reel }: { reel?: ReelData }) {
   const { activeEvidenceIndex, setActiveEvidenceIndex, seekTarget, setSeekTarget, setEngaged, selectMoment } =
     useStore();
   const [ready, setReady] = useState(false);
+  // Set when the manifest has not arrived after a while. The stream keeps loading underneath;
+  // this only replaces a bare spinner with a sentence and a link, so a slow or blocked CDN is
+  // not mistaken for a hung page.
+  const [slow, setSlow] = useState(false);
   // A stream that dies mid-playback is reported rather than left as a frozen frame.
   const [streamError, setStreamError] = useState<string | null>(null);
 
   const url = reel?.stream_url ?? null;
 
-  useEffect(() => setStreamError(null), [url]);
+  useEffect(() => {
+    setStreamError(null);
+    setSlow(false);
+  }, [url]);
+
+  useEffect(() => {
+    if (ready || !url) return;
+    const timer = setTimeout(() => setSlow(true), 12_000);
+    return () => clearTimeout(timer);
+  }, [ready, url]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -154,7 +167,16 @@ export function Reel({ reel }: { reel?: ReelData }) {
           so the reel stays on screen while the evidence below it is read. */}
       <div className="player">
         <video ref={videoRef} controls playsInline preload="metadata" />
-        {!ready && !streamError && <div className="spinner">loading stream…</div>}
+        {!ready && !streamError && !slow && <div className="spinner">loading stream…</div>}
+        {!ready && !streamError && slow && (
+          <div className="err stream-err" role="status">
+            The reel stream is slow to load from VideoDB. Still trying; the shots below select
+            their moments either way, and the compiled reel plays at its link.{" "}
+            <a href={url} target="_blank" rel="noreferrer">
+              open stream
+            </a>
+          </div>
+        )}
         {streamError && (
           <div className="err stream-err" role="alert">
             {streamError}{" "}
