@@ -6,6 +6,8 @@ import { Html, OrbitControls, Preload } from "@react-three/drei";
 import * as THREE from "three";
 import { indexReel } from "@/lib/reel";
 import { useStore } from "@/lib/store";
+import { softwareRenderer } from "@/lib/gpu";
+import type { CelestialBody } from "@/lib/types";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 import type { Evidence, Reel } from "@/lib/types";
 import { Earth, Jupiter, Mars, Mercury, Moon, OrbitRing, Saturn, Sky, SmallBodies, Sun, Titan, Venus } from "./space/Bodies";
@@ -219,10 +221,41 @@ function Marker({
   );
 }
 
-function BodyLabel({ position, text }: { position: THREE.Vector3; text: string }) {
+/** The name floating above a body. A click on the name focuses the body, the same as a click
+ *  on the body itself: the name is the part people aim for, and before this it was inert text
+ *  sitting over a picker sphere that the overlay kept the click from reaching. Labels without
+ *  a body to focus (deep space, unplaced) stay plain text. */
+function BodyLabel({
+  position,
+  text,
+  body,
+}: {
+  position: THREE.Vector3;
+  text: string;
+  body?: CelestialBody;
+}) {
+  const { focusBody, setFocusBody } = useStore();
+  if (!body) {
+    return (
+      <Html position={position} center zIndexRange={[10, 0]}>
+        <div className="body-label">{text}</div>
+      </Html>
+    );
+  }
   return (
     <Html position={position} center zIndexRange={[10, 0]}>
-      <div className="body-label">{text}</div>
+      <button
+        type="button"
+        className="body-label body-label-pick"
+        data-focused={focusBody === body}
+        aria-label={`inspect ${text}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setFocusBody(focusBody === body ? null : body);
+        }}
+      >
+        {text}
+      </button>
     </Html>
   );
 }
@@ -385,15 +418,15 @@ function Scene({
       <OrbitRing center={EARTH_CENTER} radius={EARTH_RADIUS + 1.8} />
       <OrbitRing center={EARTH_CENTER} radius={MOON_CENTER.distanceTo(EARTH_CENTER)} opacity={0.06} />
 
-      <BodyLabel position={MARS_CENTER.clone().add(new THREE.Vector3(0, MARS_RADIUS + 1.1, 0))} text="Mars" />
-      <BodyLabel position={EARTH_CENTER.clone().add(new THREE.Vector3(0, EARTH_RADIUS + 1.4, 0))} text="Earth" />
-      <BodyLabel position={MOON_CENTER.clone().add(new THREE.Vector3(0, 2.4, 0))} text="Moon" />
-      <BodyLabel position={VENUS_CENTER.clone().add(new THREE.Vector3(0, VENUS_RADIUS + 1.3, 0))} text="Venus" />
-      <BodyLabel position={MERCURY_CENTER.clone().add(new THREE.Vector3(0, MERCURY_RADIUS + 1.1, 0))} text="Mercury" />
-      <BodyLabel position={JUPITER_CENTER.clone().add(new THREE.Vector3(0, JUPITER_RADIUS + 1.8, 0))} text="Jupiter" />
-      <BodyLabel position={SATURN_CENTER.clone().add(new THREE.Vector3(0, SATURN_RADIUS + 1.8, 0))} text="Saturn" />
-      <BodyLabel position={TITAN_CENTER.clone().add(new THREE.Vector3(0, TITAN_RADIUS + 1.1, 0))} text="Titan" />
-      <BodyLabel position={COMET_CENTER.clone().add(new THREE.Vector3(0, 2.4, 0))} text="small bodies" />
+      <BodyLabel position={MARS_CENTER.clone().add(new THREE.Vector3(0, MARS_RADIUS + 1.1, 0))} text="Mars" body="mars" />
+      <BodyLabel position={EARTH_CENTER.clone().add(new THREE.Vector3(0, EARTH_RADIUS + 1.4, 0))} text="Earth" body="earth" />
+      <BodyLabel position={MOON_CENTER.clone().add(new THREE.Vector3(0, 2.4, 0))} text="Moon" body="moon" />
+      <BodyLabel position={VENUS_CENTER.clone().add(new THREE.Vector3(0, VENUS_RADIUS + 1.3, 0))} text="Venus" body="venus" />
+      <BodyLabel position={MERCURY_CENTER.clone().add(new THREE.Vector3(0, MERCURY_RADIUS + 1.1, 0))} text="Mercury" body="mercury" />
+      <BodyLabel position={JUPITER_CENTER.clone().add(new THREE.Vector3(0, JUPITER_RADIUS + 1.8, 0))} text="Jupiter" body="jupiter" />
+      <BodyLabel position={SATURN_CENTER.clone().add(new THREE.Vector3(0, SATURN_RADIUS + 1.8, 0))} text="Saturn" body="saturn" />
+      <BodyLabel position={TITAN_CENTER.clone().add(new THREE.Vector3(0, TITAN_RADIUS + 1.1, 0))} text="Titan" body="titan" />
+      <BodyLabel position={COMET_CENTER.clone().add(new THREE.Vector3(0, 2.4, 0))} text="small bodies" body="comet_asteroid" />
       {hasDeepSpace && (
         <BodyLabel position={DEEP_SPACE_CENTER.clone().add(new THREE.Vector3(0, 3, 0))} text="deep space" />
       )}
@@ -446,14 +479,17 @@ export default function Orrery({
   cited: number[];
 }) {
   const reduced = useReducedMotion();
+  // Decided once, before the canvas exists. On a CPU renderer the scene draws at a fraction of
+  // the pixels and without antialiasing, so the page stays responsive instead of pretty.
+  const [software] = useState(() => softwareRenderer());
 
   return (
     <Canvas
       // Starts on ESTABLISHING so the first painted frame is already the opening wide shot,
       // rather than a pose the rig then has to fly out of.
       camera={{ position: [-64, 170, 298], fov: 45, near: 0.05, far: 4000 }}
-      dpr={[1, 1.75]}
-      gl={{ antialias: true, powerPreference: "high-performance" }}
+      dpr={software ? 0.5 : [1, 1.75]}
+      gl={{ antialias: !software, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.05;
