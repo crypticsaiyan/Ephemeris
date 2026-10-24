@@ -36,10 +36,18 @@ export default function Page() {
   const { result, setResult, autoFollow, setAutoFollow, selectMoment, activeEvidenceIndex } =
     useStore();
   const [preset, setPreset] = useState("water-mars");
-  const [question, setQuestion] = useState("");
+  // The box is uncontrolled: the browser owns the text, React only reads it. A controlled
+  // input throws away any value that arrives without an input event, which is how some
+  // assistive tools, password managers and test drivers put long text into a field, and the
+  // visitor then watches their question vanish. The length is mirrored into state on every
+  // input event for the live "too long" note, and read again from the field itself on submit,
+  // so the check holds whichever way the text got there.
+  const questionRef = useRef<HTMLInputElement | null>(null);
+  const [questionLength, setQuestionLength] = useState(0);
+  const readQuestion = () => (questionRef.current?.value ?? "").trim();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const tooLong = question.trim().length > MAX_QUESTION;
+  const tooLong = questionLength > MAX_QUESTION;
   const [hud, setHud] = useState(true);
   // Live reasoning steps for a question in flight. A run takes about ninety seconds, so
   // the loop has to be visible while it works.
@@ -145,7 +153,9 @@ export default function Page() {
   }, []);
 
   async function runLive() {
-    const q = question.trim();
+    const q = readQuestion();
+    // Measured here as well as on input, for text that arrived without an event.
+    setQuestionLength(q.length);
     if (!q || q.length > MAX_QUESTION) return;
     setBusy(true);
     setError(null);
@@ -300,16 +310,17 @@ export default function Page() {
               <label htmlFor="q">Ask</label>
               <input
                 id="q"
-                value={question}
+                ref={questionRef}
+                defaultValue=""
                 placeholder="how did the instruments for finding water change?"
-                onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !busy && !tooLong && void runLive()}
+                onInput={(e) => setQuestionLength(e.currentTarget.value.trim().length)}
+                onKeyDown={(e) => e.key === "Enter" && !busy && void runLive()}
                 disabled={busy}
               />
               <button
                 className="run"
                 onClick={() => void runLive()}
-                disabled={busy || !question.trim() || tooLong}
+                disabled={busy || questionLength === 0 || tooLong}
               >
                 {busy ? "running…" : "→"}
               </button>
@@ -318,7 +329,7 @@ export default function Page() {
                 first means nobody types a paragraph, presses Enter and gets told afterwards. */}
             {tooLong && (
               <div className="err" role="alert">
-                question too long: {question.trim().length} of {MAX_QUESTION} characters
+                question too long: {questionLength} of {MAX_QUESTION} characters
               </div>
             )}
             {error && !tooLong && <div className="err">{error}</div>}
