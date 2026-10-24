@@ -3,6 +3,8 @@
 # Ephemeris
 
 **A research agent over NASA's archival video.**
+
+**Live:** [ephemeris-taupe.vercel.app](https://ephemeris-taupe.vercel.app). Every pull request gets its own preview and a TestSprite check before merge; see [Testing](#testing).
 Ask a question in plain English. Get a cited answer, ordered by when things actually happened,
 plus an auto-edited evidence reel cut from the exact seconds that support it.
 
@@ -190,6 +192,29 @@ python evals/answers.py data/answers       # answer gate
 python tests/test_era.py                   # and seven more suites
 cd web && npm test                         # scene placement, craft mapping
 ```
+
+## Testing
+
+Three layers, each catching what the one below cannot.
+
+**Offline unit tests** (`tests/`, run by CI on every push): reel shot mapping, era extraction, passage selection, mission metadata, speech alignment, coverage policy, and the ask service's HTTP front with a stubbed agent. No network, no key.
+
+**Web checks** (`web/scripts/`, run by CI): scene placement for every celestial body, craft mapping, and the browser-side run store.
+
+**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 18 tests:
+
+| Area | What is asserted |
+|---|---|
+| Presets | Each Start preset loads an answer, chronology, evidence and reel; switching presets replaces the loaded run and marks the active one |
+| Answer and chronology | Citation numbers map to evidence rows; chronology points are in ascending date order |
+| Evidence list | Rows render earliest era first; clicking a row changes the active moment and seeks the reel |
+| Evidence reel | The player loads the HLS stream, or says that the stream is slow or that the browser cannot decode it, with a link; a bare spinner is a failure |
+| Orrery | Clicking a body's name focuses it and opens the body panel with its counts; the sidebar shows the era range and the four provenance kinds |
+| Ask form | Empty input keeps submit disabled; a question past 400 characters is refused on the page before any request |
+| Saved runs | The Asked list shows its empty state in a fresh browser |
+| Live ask | One real question goes through the ask service: running state, progress trace, an answer with chronology and evidence, saved to the browser, survives a reload, reopens without rerunning |
+
+The live-ask test is the only one that spends VideoDB credits, and the visitor quota in `web/lib/ratelimit.ts` bounds it. The first run of this suite found four real gaps, fixed in the same pull request that carried the red check: body names over the orrery were not click targets, an over-limit question was only refused by the server, the Asked list disappeared when empty, and a browser without H.264 support sat on a spinner forever.
 
 ## Setup
 
