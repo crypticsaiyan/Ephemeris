@@ -1,0 +1,172 @@
+openapi: 3.1.0
+info:
+  title: Ephemeris API
+  version: "1.0"
+  description: |
+    The one public endpoint of the Ephemeris web app, plus the preset answers it serves as static
+    files. A live ask runs the research agent and streams its reasoning as server-sent events;
+    it takes about two minutes and spends VideoDB credits, so it sits behind a visitor quota of
+    five questions an hour and two runs at once per client address.
+servers:
+  - url: https://ephemeris-taupe.vercel.app
+paths:
+  /api/ask:
+    post:
+      summary: Ask the archive a question
+      description: |
+        Validates the question, admits it under the visitor quota, forwards it to the ask
+        service and streams the agent's events back. The response is `text/event-stream`:
+        zero or more `progress` events, then exactly one `result` or one `error`. A comment
+        line `: keepalive` may appear every fifteen seconds. Validation failures and quota
+        refusals are ordinary JSON responses, and a malformed request never spends quota.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  minLength: 1
+                  maxLength: 400
+                  description: Plain-English research question. Whitespace is trimmed first.
+            examples:
+              ok:
+                value:
+                  question: when did rovers first find evidence of past water on mars
+      responses:
+        "200":
+          description: "Event stream. Each event is `event: <name>` then `data: <json>`."
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                stream:
+                  value: |
+                    event: progress
+                    data: {"n":1,"kind":"decompose","at":0.4,"summary":"3 sub-questions"}
+
+                    event: result
+                    data: {"question":"...","answer":{"answer":"...","chronology":[],"citations":[]},"evidence":[],"reel":{"stream_url":"https://play.videodb.io/..."}}
+        "400":
+          description: Rejected before any work. One of three messages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidJson:
+                  summary: Body is not JSON
+                  value: { error: "invalid JSON body" }
+                missing:
+                  summary: Question empty or whitespace
+                  value: { error: "question is required" }
+                tooLong:
+                  summary: Question over 400 characters
+                  value: { error: "question too long" }
+        "429":
+          description: Visitor quota. `retry-after` header carries seconds to wait.
+          headers:
+            retry-after:
+              schema: { type: integer }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Live asks are not configured on this deployment (no ask service).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: live asks are not configured on this deployment
+  /answers/{preset}.json:
+    get:
+      summary: A pre-generated answer for a Start preset
+      parameters:
+        - name: preset
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [water-mars, water-elsewhere, apollo-surface, telescopes, first-images]
+      responses:
+        "200":
+          description: The same shape as a `result` event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResult"
+        "404":
+          description: Unknown preset.
+  /corpus/bodies.json:
+    get:
+      summary: Per-body facts the body panel shows
+      responses:
+        "200":
+          description: Object keyed by celestial body with scene, clip, footage and mission counts.
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    AskResult:
+      type: object
+      required: [question, answer, evidence, reel]
+      properties:
+        question: { type: string }
+        answer:
+          type: object
+          required: [answer, chronology, citations]
+          properties:
+            answer: { type: string }
+            chronology:
+              type: array
+              items:
+                type: object
+                properties:
+                  era: { type: string }
+                  claim: { type: string }
+            citations:
+              type: array
+              items: { type: integer }
+        evidence:
+          type: array
+          description: Ordered earliest era first; the reel plays shots in this order.
+          items:
+            type: object
+            required: [index, era_start, celestial_body, mission, text]
+            properties:
+              index: { type: string }
+              era_start: { type: [integer, "null"] }
+              era_basis: { type: string }
+              celestial_body: { type: string }
+              mission: { type: [string, "null"] }
+              text: { type: string }
+              start: { type: number }
+              end: { type: number }
+        reel:
+          type: object
+          properties:
+            stream_url: { type: [string, "null"] }
+            shots:
+              type: array
+              items:
+                type: object
+                properties:
+                  evidence_index: { type: integer }
+                  duration: { type: number }
+            error: { type: [string, "null"] }
+        trace:
+          type: array
+          items: { type: object }
