@@ -22,6 +22,9 @@ const Orrery = dynamic(() => import("@/components/Orrery"), { ssr: false });
    different worlds, which is what stops a multi-domain archive reading as Mars-only.
    `telescopes` is last: the widest era span of the four, but every moment sits in deep space,
    so the orrery barely moves. */
+/** Same ceiling as `/api/ask`, which answers 400 "question too long" past it. */
+const MAX_QUESTION = 400;
+
 const PRESETS = [
   { id: "water-mars", label: "How understanding of water on Mars changed" },
   { id: "water-elsewhere", label: "Where else NASA looked for water and ice" },
@@ -36,6 +39,7 @@ export default function Page() {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const tooLong = question.trim().length > MAX_QUESTION;
   const [hud, setHud] = useState(true);
   // Live reasoning steps for a question in flight. A run takes about ninety seconds, so
   // the loop has to be visible while it works.
@@ -142,7 +146,7 @@ export default function Page() {
 
   async function runLive() {
     const q = question.trim();
-    if (!q) return;
+    if (!q || q.length > MAX_QUESTION) return;
     setBusy(true);
     setError(null);
     setProgress([]);
@@ -299,14 +303,25 @@ export default function Page() {
                 value={question}
                 placeholder="how did the instruments for finding water change?"
                 onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !busy && void runLive()}
+                onKeyDown={(e) => e.key === "Enter" && !busy && !tooLong && void runLive()}
                 disabled={busy}
               />
-              <button className="run" onClick={() => void runLive()} disabled={busy || !question.trim()}>
+              <button
+                className="run"
+                onClick={() => void runLive()}
+                disabled={busy || !question.trim() || tooLong}
+              >
                 {busy ? "running…" : "→"}
               </button>
             </div>
-            {error && <div className="err">{error}</div>}
+            {/* The server refuses anything past the limit with the same words. Saying it here
+                first means nobody types a paragraph, presses Enter and gets told afterwards. */}
+            {tooLong && (
+              <div className="err" role="alert">
+                question too long: {question.trim().length} of {MAX_QUESTION} characters
+              </div>
+            )}
+            {error && !tooLong && <div className="err">{error}</div>}
 
             {busy && (
               <div className="running">
@@ -349,6 +364,12 @@ export default function Page() {
 
             {/* Every live run is kept, so a question asked once never has to be paid for twice.
                 Kept here, in this browser: there is no copy on the server to fall back to. */}
+            {saved.length === 0 && !busy && (
+              <div className="saved-row saved-empty">
+                <span className="saved-label">Asked</span>
+                <span className="saved-meta">nothing yet · runs you ask for are kept in this browser</span>
+              </div>
+            )}
             {saved.length > 0 && (
               <div className="saved-row">
                 {/* Short enough to sit in the gutter beside "Ask" and "Start". The count lives
