@@ -1,35 +1,26 @@
-# Render blueprint. Create the service with this rather than by hand so the instance type and
-# the secret placeholders are not something anyone has to remember.
+# Render blueprint for the ask service. The web app deploys elsewhere (Vercel) and reaches this
+# over ASK_SERVICE_URL; the two share ASK_SERVICE_TOKEN.
 #
-#   Render dashboard -> New -> Blueprint -> pick this repo -> branch deploy/free
+#   Render dashboard -> New -> Blueprint -> pick this repo -> branch main
 #
-# `plan: free` is load-bearing. An earlier version of this file said `starter` and asked for a
-# persistent disk, and a Blueprint deploy quoted a monthly bill for exactly that reason. Free
-# instances cannot mount disks at all, so the disk block is gone rather than commented out.
+# `plan: free` is load-bearing. Free instances cannot mount disks, and this service needs none:
+# the agent writes to a temp directory that is deleted once the answer has been streamed out.
+# A free instance sleeps after fifteen minutes idle and takes about a minute to wake.
 
 services:
   - type: web
-    name: ephemeris
+    name: ephemeris-ask
     runtime: docker
     dockerfilePath: ./Dockerfile
-    # 512 MB and 0.1 CPU. A full run was measured at 49 MB RSS for the agent next to 141 MB for
-    # the Next server, so memory is not the tight constraint here; the shared CPU is. The run
-    # spends most of its two minutes waiting on VideoDB rather than computing.
     plan: free
     region: oregon
-    healthCheckPath: /
-    autoDeploy: false
+    healthCheckPath: /healthz
+    autoDeploy: true
     envVars:
       - key: VIDEO_DB_API_KEY
         sync: false
       - key: VIDEODB_COLLECTION_ID
         sync: false
-      # Optional. Set it and send `x-ask-token` to skip the visitor quota during a live demo.
-      # Leave it unset and nobody bypasses, including you.
-      - key: EPHEMERIS_ASK_TOKEN
-        sync: false
-
-# No disk, and nothing that wants one. Free instances cannot mount a disk, so the server keeps no
-# history: saved runs live in the visitor's browser and the agent's output is written to a temp
-# directory that is deleted once it has been streamed out. The preset answers are baked into the
-# image at build time and survive every restart, so the landing page is unaffected.
+      # Shared with the web app. Unset, the service refuses every ask.
+      - key: ASK_SERVICE_TOKEN
+        generateValue: true
