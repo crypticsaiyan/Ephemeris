@@ -6,6 +6,7 @@ import { Html, OrbitControls, Preload } from "@react-three/drei";
 import * as THREE from "three";
 import { indexReel } from "@/lib/reel";
 import { useStore } from "@/lib/store";
+import { softwareRenderer } from "@/lib/gpu";
 import type { CelestialBody } from "@/lib/types";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 import type { Evidence, Reel } from "@/lib/types";
@@ -478,14 +479,17 @@ export default function Orrery({
   cited: number[];
 }) {
   const reduced = useReducedMotion();
+  // Decided once, before the canvas exists. On a CPU renderer the scene draws at a fraction of
+  // the pixels and without antialiasing, so the page stays responsive instead of pretty.
+  const [software] = useState(() => softwareRenderer());
 
   return (
     <Canvas
       // Starts on ESTABLISHING so the first painted frame is already the opening wide shot,
       // rather than a pose the rig then has to fly out of.
       camera={{ position: [-64, 170, 298], fov: 45, near: 0.05, far: 4000 }}
-      dpr={[1, 1.75]}
-      gl={{ antialias: true, powerPreference: "high-performance" }}
+      dpr={software ? 0.5 : [1, 1.75]}
+      gl={{ antialias: !software, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.05;
