@@ -201,7 +201,7 @@ Three layers, each catching what the one below cannot.
 
 **Web checks** (`web/scripts/`, run by CI): scene placement for every celestial body, craft mapping, and the browser-side run store.
 
-**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 17 browser tests:
+**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 18 browser tests:
 
 | Area | What is asserted |
 |---|---|
@@ -214,9 +214,28 @@ Three layers, each catching what the one below cannot.
 | Saved runs | The Asked list shows its empty state in a fresh browser |
 | Live ask | One real question goes through the ask service: running state, progress trace, an answer with chronology and evidence, saved to the browser, survives a reload, reopens without rerunning |
 
-**TestSprite API suite.** A second project, planned from [`docs/openapi.yaml`](docs/openapi.yaml) and probes of the live API, runs against the API itself, 7 tests, all passing against production. It runs automatically through a push trigger on every push to the pull request branch and to `main`, against the project's saved production environment, and the runs are listed in the portal. The pull-request trigger type does not work for API projects today: its runs start with no target URL and fail in under a second with a TestSprite-side internal error (reported to the team), so the push trigger carries the automation and the browser suite carries the check on the PR. What it checks: a valid question streams `progress` events then one `result`; empty, whitespace-only and over-length questions are refused with the documented 400 bodies before any work; whitespace is trimmed; each preset file returns the `AskResult` shape and an unknown preset returns 404; the body facts file is well-formed.
+**TestSprite API suite.** A second project, planned from [`docs/openapi.yaml`](docs/openapi.yaml) and probes of the live API, runs against the API itself: 32 tests, run automatically through a push trigger against the project's saved production environment. The pull-request trigger type does not work for API projects today (its runs start with no target URL and fail in under a second with a TestSprite-side internal error, reported to the team), so the browser suite carries the check on each PR and the API runs are listed in the portal. What it checks: every preset file's full shape (eight evidence rows in ascending era order, one reel shot per row, citations that point at rows, a reachable HLS manifest); the five presets are five different answers; `/api/ask` refuses invalid JSON, a missing or null question, whitespace-only input and anything past 400 characters with the exact documented bodies, as JSON, with no path, key or stack text, and never opens a stream; only POST is accepted; the body facts file covers every body the presets name; the ask service answers its health check, refuses a request with no token or a wrong one, and has no other routes; the served page contains no key names or service address.
 
-The live-ask test is the only one that spends VideoDB credits, and the visitor quota in `web/lib/ratelimit.ts` bounds it. The first run of this suite found four real gaps, fixed in the same pull request that carried the red check: body names over the orrery were not click targets, an over-limit question was only refused by the server, the Asked list disappeared when empty, and a browser without H.264 support sat on a spinner forever.
+The live-ask test is the only one that spends VideoDB credits, and the visitor quota in `web/lib/ratelimit.ts` bounds it. What the suite caught is listed in full below.
+
+### What TestSprite caught
+
+Every row below was a failing check first, on a pull request or in the portal's run history, and then a passing one. None of these would have shown up in a manual pass: each needs a clean browser, a runner that types fast, a cold host or three requests in a row.
+
+| Found by | What was wrong | Fix |
+|---|---|---|
+| Browser suite, PR #8 | The planet names over the orrery were plain text on top of the picker sphere; clicking a name did nothing | The names are buttons that focus the body |
+| Browser suite, PR #8 | Once they were buttons, no click reached them: the label rule set `pointer-events: none` and the buttons inherited it | A more specific rule restores clicks; reproduced headless and verified before the push |
+| Browser suite, PR #8 | An over-limit question was only refused by the server after submit | The page counts characters live, disables submit, and says "question too long" |
+| Browser suite, PR #8 | The Asked list disappeared when empty, so a first visit showed no sign of where runs go | An empty row says so |
+| Browser suite, PR #8 | A browser without H.264 sat on "loading stream…" forever | The player says it cannot play the reel, or that the stream is slow, with a link |
+| Browser suite, PR #8 | On a CPU-rendered browser the 3D scene cost 53 ms a frame and every keystroke in the Ask box waited behind one | The scene draws at half resolution without antialiasing when the renderer is software; 17 ms a frame |
+| Browser suite, PR #11 | A long value set from code vanished from the Ask box: it was a controlled input, and React discards a value that arrives without an input event | The box is uncontrolled and the length is read from the field on submit |
+| API suite, PR #13 | The ask service checked the token before reading the body, so a 401 left the JSON unread and the next request on that connection was parsed from the leftover bytes | The service closes the connection after any refusal; a Python regression test fails without it |
+| Browser suite, PR #13 | Focusing Venus or Mercury left the body panel on "reading corpus summary…" forever: they have no footage, and the panel could not tell that from loading | A loaded summary with no entry says there is no footage of that body |
+| Browser suite, PR #13 | The first question after the free host slept failed with "ask service answered 502" | The route retries 502, 503, 504 and refused connections for up to 75 seconds and the trace says the host is starting up |
+
+PR #13 is the one to read for the pattern: its first commit is only the regression test, so CI and TestSprite both fail on it, and the second commit carries the fixes and turns both green.
 
 ## Setup
 
