@@ -67,6 +67,9 @@ paths:
                 tooLong:
                   summary: Question over 400 characters
                   value: { error: "question too long" }
+                notText:
+                  summary: Question is a number, array, object or boolean
+                  value: { error: "question must be text" }
         "429":
           description: Visitor quota. `retry-after` header carries seconds to wait.
           headers:
