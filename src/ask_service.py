@@ -95,6 +95,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(raw)))
+        if status >= 400:
+            # A refusal is often sent before the request body has been read: the token is
+            # checked first, on purpose, so an unauthorised caller costs nothing. The unread
+            # bytes would then sit in front of the next request on this connection, and a proxy
+            # that reuses upstream connections hands that next request, from somebody else, a
+            # 400 from the parser. Closing after every refusal makes that impossible.
+            self.send_header("connection", "close")
+            self.close_connection = True
         for key, value in (headers or {}).items():
             self.send_header(key, value)
         self.end_headers()

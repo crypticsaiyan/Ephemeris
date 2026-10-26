@@ -95,12 +95,18 @@ export function BodyPanel({ result }: { result: AskResult | null }) {
             </p>
           )}
         </>
-      ) : (
-        <p className="note">
-          {factsError
-            ? "Corpus summary not generated yet: run scripts/dump_bodies.py."
-            : "reading corpus summary…"}
+      ) : factsError ? (
+        <p className="note">Corpus summary not generated yet: run scripts/dump_bodies.py.</p>
+      ) : facts ? (
+        // The summary loaded and this body is not in it: the archive holds no footage of it.
+        // Venus and Mercury are on the stage and can be focused, so this is a state people
+        // reach, and it used to read "reading corpus summary…" forever.
+        <p className="note" data-testid="no-footage">
+          No footage of {LABELS[focusBody] ?? focusBody} in the archive yet: nothing was
+          indexed for it, so there is nothing to count.
         </p>
+      ) : (
+        <p className="note">reading corpus summary…</p>
       )}
 
       <div className="bp-here">
