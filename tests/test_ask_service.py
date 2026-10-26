@@ -121,6 +121,21 @@ def main() -> None:
             assert [e for e, _ in got] == ["progress", "progress", "error"], got
             assert "<redacted>" in got[2][1]["error"] and "fell over" not in got[2][1]["error"], got[2]
 
+            # A refusal sent before the body is read must not poison the connection. The token
+            # is checked first, so the 401 goes out with the JSON body still unread; if the
+            # connection stayed open, those bytes would be parsed as the next request line.
+            import http.client
+            conn = http.client.HTTPConnection(base.split("//")[1], timeout=10)
+            conn.request("POST", "/ask", body=json.dumps({"question": "hi"}),
+                         headers={"content-type": "application/json", "x-service-token": "wrong"})
+            first = conn.getresponse(); first.read()
+            assert first.status == 401, first.status
+            assert (first.getheader("connection") or "").lower() == "close", first.getheaders()
+            conn.request("GET", "/healthz")
+            second = conn.getresponse()
+            assert second.status == 200, f"request after a refusal got {second.status}"
+            conn.close()
+
             # Without a configured token the service refuses everyone, including a caller
             # sending the empty string.
             os.environ["ASK_SERVICE_TOKEN"] = ""

@@ -22,6 +22,12 @@ const SERVICE_TOKEN = process.env.ASK_SERVICE_TOKEN ?? "";
 
 const encoder = new TextEncoder();
 
+/** Statuses a sleeping host's edge answers with while the process behind it starts. */
+const WAKING_STATUSES = new Set([502, 503, 504]);
+const WAKE_RETRY_MS = 5_000;
+/** Long enough for a cold start, short enough that the run itself still fits `maxDuration`. */
+const WAKE_BUDGET_MS = 75_000;
+
 function sse(event: string, data: unknown): Uint8Array {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -59,16 +65,46 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const upstream = await fetch(`${SERVICE_URL}/ask`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-service-token": SERVICE_TOKEN,
-          },
-          body: JSON.stringify({ question }),
-          signal: AbortSignal.timeout(maxDuration * 1000),
-        });
+        // A free host stops an idle service and starts it again on the next request, which takes
+        // about forty seconds, and its edge answers 502, 503 or 504 until the process is up. The
+        // first question after a quiet spell used to fail with "ask service answered 502"; a
+        // TestSprite run on a pull request hit exactly that. Those three statuses and a refused
+        // connection mean "not up yet", so wait and ask again, and tell the visitor why the
+        // trace has not started. Anything else, including the service's own 400 and 401, is an
+        // answer and is passed on as it is.
+        const deadline = Date.now() + WAKE_BUDGET_MS;
+        let upstream: Response | null = null;
+        for (let attempt = 1; ; attempt++) {
+          try {
+            upstream = await fetch(`${SERVICE_URL}/ask`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-service-token": SERVICE_TOKEN,
+              },
+              body: JSON.stringify({ question }),
+              signal: AbortSignal.timeout(maxDuration * 1000),
+            });
+            if (!WAKING_STATUSES.has(upstream.status)) break;
+            await upstream.body?.cancel();
+          } catch (error) {
+            // A refused or reset connection is the same "not up yet"; a deliberate abort is not.
+            if (error instanceof DOMException && error.name === "AbortError") throw error;
+          }
+          if (Date.now() + WAKE_RETRY_MS > deadline) {
+            throw new Error("the ask service did not wake up in time: try again in a minute");
+          }
+          controller.enqueue(
+            sse("progress", {
+              n: -attempt,
+              kind: "waking",
+              summary: "the archive's host was asleep and is starting up, about 40 seconds",
+            }),
+          );
+          await new Promise((resolve) => setTimeout(resolve, WAKE_RETRY_MS));
+        }
 
+        if (!upstream) throw new Error("no answer from the ask service");
         if (!upstream.ok || !upstream.body) {
           let detail = `ask service answered ${upstream.status}`;
           try {
