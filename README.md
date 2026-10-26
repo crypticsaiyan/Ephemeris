@@ -1,12 +1,15 @@
 <div align="center">
 
-# Ephemeris
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/logo/logo-horizontal.svg">
+  <img src="docs/logo/logo-horizontal-light.svg" alt="Ephemeris logo: an orbit drawn as a ring of evenly spaced dots, with one larger orange dot marking a position" width="360">
+</picture>
 
 **A research agent over NASA's archival video.**
 
-**Live:** [ephemeris-taupe.vercel.app](https://ephemeris-taupe.vercel.app). Every pull request gets its own preview and a TestSprite check before merge; see [Testing](#testing).
 Ask a question in plain English. Get a cited answer, ordered by when things actually happened,
-plus an auto-edited evidence reel cut from the exact seconds that support it.
+plus an auto-edited evidence reel cut from the exact seconds that support it, and a 3D solar
+system whose camera follows the reel. Built on VideoDB, with a Python agent and a Next.js web app.
 
 [![VideoDB](https://img.shields.io/badge/built%20on-VideoDB-5b4ee9?style=flat-square)](https://videodb.io)
 [![Python](https://img.shields.io/badge/python-3.12-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
@@ -14,9 +17,50 @@ plus an auto-edited evidence reel cut from the exact seconds that support it.
 [![Three.js](https://img.shields.io/badge/three.js-r3f-049ef4?style=flat-square&logo=threedotjs&logoColor=white)](https://docs.pmnd.rs/react-three-fiber)
 [![Licence](https://img.shields.io/badge/licence-MIT-16a34a?style=flat-square)](LICENSE)
 
+**[Live app](https://ephemeris-taupe.vercel.app)** &nbsp;·&nbsp; **[Testing](#testing)** &nbsp;·&nbsp; **[How it works](#how-it-works)** &nbsp;·&nbsp; **[Setup](#setup)**
+
+<br>
+
+<img src="docs/images/app.png" alt="The Ephemeris app: a cited answer on the left, the 3D solar system in the centre, the evidence reel and shot list on the right, and an era timeline along the bottom" width="880">
+
 </div>
 
----
+## Features
+
+- **Questions, not keywords.** A question is decomposed and searched across five indexes and two time axes.
+- **Cited answers.** Every claim carries a citation number that maps to an evidence row and a moment in a clip.
+- **Real chronology.** Evidence is ordered by the era each moment discusses, not by NASA's upload date, and every date records how it was known.
+- **An evidence reel.** One video is compiled from the supporting seconds, with provenance burned into the frame.
+- **A 3D scene.** Each moment stands on the body it concerns, and the camera moves through the decades as the reel plays.
+- **Honest refusals.** Gibberish and questions about bodies the archive does not cover end the run early, with what the archive does cover.
+
+## At a glance
+
+| | |
+|---|---|
+| **Live app** | [ephemeris-taupe.vercel.app](https://ephemeris-taupe.vercel.app) |
+| **Corpus** | 87 clips, 240 minutes, 1,484 scenes, 1957 to 2025, all real NASA footage |
+| **Tests** | 85 in TestSprite: 34 browser tests on every pull request (merge gate on) and 51 API tests |
+| **Bugs the tests found** | 11, each a failing check first and a passing one after: [the table](#what-testsprite-caught) |
+| **Read one PR** | [#13](https://github.com/crypticsaiyan/Ephemeris/pull/13): the first commit is only a failing test, the second carries the fixes and turns CI and TestSprite green |
+
+## Contents
+
+1. [Try it](#try-it)
+2. [Why this is not a search box](#why-this-is-not-a-search-box)
+3. [Testing](#testing): [what TestSprite caught](#what-testsprite-caught), [browser suite](#browser-suite), [API suite](#api-suite), [limits](#limits-worth-knowing)
+4. [How it works](#how-it-works): VideoDB, dates, asking a question, the interface
+5. [Quality gates](#quality-gates)
+6. [Setup](#setup), [Deploying](#deploying), [Pipeline](#pipeline), [Reproducing the corpus](#reproducing-the-corpus)
+7. [Layout](#layout), [Architecture](#architecture), [Notes on VideoDB behaviour](#notes-on-videodb-behaviour), [Licence](#licence)
+
+## Try it
+
+**No setup:** open the [live app](https://ephemeris-taupe.vercel.app), click one of the four **Start** presets, then click a planet's name in the scene, a citation number in the answer, or a needle on the timeline. The presets are real pipeline output and need no key.
+
+**A question of your own:** type it in the **Ask** box. A live run takes about two minutes and is limited to five questions an hour per visitor, because each one spends VideoDB credits.
+
+**Run it locally:** see [Setup](#setup). The presets work without a key; only live asks need one.
 
 ## Why this is not a search box
 
@@ -26,7 +70,7 @@ discusses, and returns an answer no single clip contains, together with the reel
 "Show me Mars footage" is retrieval; "trace how our understanding of water on Mars changed over
 time" is the query the whole system is built around.
 
-Built for VideoDB's "Unlock the Footage" hackathon. All footage is real NASA public-domain video
+All footage is real NASA public-domain video
 pulled live from the [NASA Image and Video Library](https://images-api.nasa.gov). Nothing is
 synthetic and no output is mocked.
 
@@ -34,7 +78,87 @@ synthetic and no output is mocked.
 space 199, ground 139, earth orbit 114, sun 107, moon 99, then comets, saturn, jupiter, titan.
 Venus and mercury are **zero**, and the agent knows it: see [refusing to answer](#refusing-to-answer).
 
-## How VideoDB is used
+## Testing
+
+![TestSprite summary: 85 tests, 11 real bugs, every pull request gated; the 11 bugs listed by PR, PR 13 red then green, and how the suite runs on every pull request](docs/images/testsprite-summary.png)
+
+Ephemeris is tested with TestSprite. Four layers, each catching what the one below cannot.
+
+| Layer | What | Where it runs |
+|---|---|---|
+| Offline unit tests | Reel shot mapping, era extraction, passage selection, mission metadata, speech alignment, coverage policy, and the ask service's HTTP front with a stubbed agent. No network, no key. | CI on every push (`tests/`) |
+| Web checks | Scene placement for every celestial body, craft mapping, and the browser-side run store | CI on every push (`web/scripts/`) |
+| TestSprite browser suite | 34 tests in a cloud browser | Every pull request, against that PR's own Vercel preview; the merge gate is on |
+| TestSprite API suite | 51 tests planned from [`docs/openapi.yaml`](docs/openapi.yaml) | A push trigger, against production |
+
+Because the browser suite runs against the pull request's own preview, the check on a PR is about that PR's code, not about `main`. The one test that spends VideoDB credits is the live ask, and the visitor quota in `web/lib/ratelimit.ts` bounds it.
+
+### What TestSprite caught
+
+Every row was a failing check first, on a pull request or in the portal's run history, and then a passing one. None of these would have shown up in a manual pass: each needs a clean browser, a runner that types fast, a cold host or three requests in a row.
+
+| Found by | What was wrong | Fix |
+|---|---|---|
+| Browser suite, PR #8 | The planet names over the orrery were plain text on top of the picker sphere; clicking a name did nothing | The names are buttons that focus the body |
+| Browser suite, PR #8 | Once they were buttons, no click reached them: the label rule set `pointer-events: none` and the buttons inherited it | A more specific rule restores clicks; reproduced headless and verified before the push |
+| Browser suite, PR #8 | An over-limit question was only refused by the server after submit | The page counts characters live, disables submit, and says "question too long" |
+| Browser suite, PR #8 | The Asked list disappeared when empty, so a first visit showed no sign of where runs go | An empty row says so |
+| Browser suite, PR #8 | A browser without H.264 sat on "loading stream…" forever | The player says it cannot play the reel, or that the stream is slow, with a link |
+| Browser suite, PR #8 | On a CPU-rendered browser the 3D scene cost 53 ms a frame and every keystroke in the Ask box waited behind one | The scene draws at half resolution without antialiasing when the renderer is software; 17 ms a frame |
+| Browser suite, PR #11 | A long value set from code vanished from the Ask box: it was a controlled input, and React discards a value that arrives without an input event | The box is uncontrolled and the length is read from the field on submit |
+| API suite, PR #13 | The ask service checked the token before reading the body, so a 401 left the JSON unread and the next request on that connection was parsed from the leftover bytes | The service closes the connection after any refusal; a Python regression test fails without it |
+| Browser suite, PR #13 | Focusing Venus or Mercury left the body panel on "reading corpus summary…" forever: they have no footage, and the panel could not tell that from loading | A loaded summary with no entry says there is no footage of that body |
+| Browser suite, PR #13 | The first question after the free host slept failed with "ask service answered 502" | The route retries 502, 503, 504 and refused connections for up to 75 seconds and the trace says the host is starting up |
+| API suite, PR #16 | `/api/ask` answered 500 with an empty body when the question was a number, array, object or boolean: the route called `.trim()` on whatever the JSON held | Anything that is not text is `400 question must be text`, before the quota; four API tests failed against production first and pass after |
+
+**Read [PR #13](https://github.com/crypticsaiyan/Ephemeris/pull/13) for the pattern.** Its first commit is only the regression test, so Python CI and TestSprite both go red (TestSprite: 16 of 18 passed). The second commit carries the fixes and both go green (18 of 18). The failing run stays in the history on purpose: TestSprite's PR comment is rewritten as each run finishes, so the red run is on the first commit's TestSprite check, which links to its report.
+
+### Browser suite
+
+34 tests, grouped by what they assert:
+
+| Area | What is asserted |
+|---|---|
+| Presets | Each Start preset loads an answer, chronology, evidence and reel; switching presets replaces the loaded run and marks the active one |
+| Answer and chronology | Citation numbers map to evidence rows; chronology points are in ascending date order |
+| Evidence list | Rows render earliest era first; clicking a row changes the active moment and seeks the reel |
+| Evidence reel | The player loads the HLS stream, or says that the stream is slow or that the browser cannot decode it, with a link; a bare spinner is a failure |
+| Orrery | Clicking a body's name focuses it and opens the body panel with its counts; the sidebar shows the era range and the four provenance kinds |
+| Ask form | Empty input keeps submit disabled. The over-limit refusal is checked by the API suite below; typing 400+ characters is too slow for the browser runner to assert reliably, so the page-side note is verified headless instead (see PR #11) |
+| Saved runs | The Asked list shows its empty state in a fresh browser |
+| More presets | The water-and-ice and telescopes presets each load their own answer, with the active preset marked |
+| Citations | A citation number in the Chronology selects the evidence moment it cites; the timeline ruler has a needle per dated moment and clicking one selects it |
+| Folds | Evidence lists eight moments earliest first; Agent trace lists numbered steps from the question; Discarded says what was dropped by coverage policy and what fell below threshold |
+| Scene controls | Hide notes clears the side panels and show notes restores them; focusing a body flips the camera strip from following reel to manual orbit; clicking the same body name twice closes its panel; Mars and Earth panels show their counts and moments, and selecting a moment from the Mars panel changes the active one |
+| Body with no footage | Focusing Venus says there is no footage of it instead of loading forever |
+| Page chrome | Title, name and tagline; the Ask box's label, placeholder and disabled submit; typing enables submit and clearing disables it again |
+| Live ask | One real question goes through the ask service: running state, progress trace, an answer with chronology and evidence, saved to the browser, survives a reload, reopens without rerunning |
+
+### API suite
+
+51 tests, grouped by what they assert:
+
+| Area | What is asserted |
+|---|---|
+| Preset files | Each file is a complete result: eight evidence rows in ascending era order, one reel shot per row, citations that point at rows, a reachable HLS manifest; the five presets are five different answers; each has a numbered trace from the question with known step kinds and non-decreasing times, ascending decade timeline, counted rejections, a saved plan, unique moments and numbered reel captions; served as JSON; HEAD works; unknown names are 404 |
+| `/api/ask` refusals | Invalid JSON, a missing or null question, whitespace-only input and anything past 400 characters get the exact documented 400 body, as JSON, with no path, key or stack text, and never open a stream |
+| `/api/ask` input types | A question that is a number, array, object or boolean is `400 question must be text`; so are top-level bodies that are not objects, a 300 KB question, and 401 characters in accents or emoji; only POST is accepted |
+| Body facts | `bodies.json` has counts, an era range and missions for every body that has footage, and covers every body the presets name |
+| Ask service | Answers its health check, refuses a request with no token or a wrong one, has no other routes |
+| The site | The served page contains no key names or service address; the title is right; the icon is SVG; unknown paths are real 404s |
+
+### Limits worth knowing
+
+- **The API suite's pull-request trigger does not work today.** Its runs start with no target URL and fail in under a second with a TestSprite-side internal error (reported to the team). A push trigger runs the same tests against production, and the runs are listed in the portal. The browser suite carries the check on each PR.
+- **TestSprite's browser cannot decode H.264 video.** The reel tests assert that the player either plays or says why it cannot, with a link, instead of asserting playback.
+- **Its runner types slowly.** The over-length question refusal is asserted by the API suite; the page-side note was verified in headless Chrome (see PR #11).
+- **The free Render host sleeps.** A cold start takes about 40 seconds; the web route waits and retries, and the trace says why.
+
+## How it works
+
+Three bands: build the index once, query it per question, show the result. The diagram is under [Architecture](#architecture).
+
+### How VideoDB is used
 
 | Layer | Surface |
 |---|---|
@@ -53,7 +177,7 @@ Venus and mercury are **zero**, and the agent knows it: see [refusing to answer]
 
 Reasoning runs on VideoDB's own LLM, so the project needs exactly one API key.
 
-### The analyzer graph
+#### The analyzer graph
 
 ```
 spoken_words ──┐
@@ -66,7 +190,7 @@ at ingestion rather than as a merge of three searches at query time. `ocr` is lo
 footage carries burned-in lower-thirds and mission clocks, and where narration is sparse it is the
 only textual signal there is.
 
-### The indexes
+#### The indexes
 
 | Index | Source | `use_for` | Answers |
 |---|---|---|---|
@@ -78,7 +202,7 @@ only textual signal there is.
 
 One VLM pass, two retrieval surfaces, no extra inference cost.
 
-## Four ways to know a date
+### Four ways to know a date
 
 NASA's library holds almost nothing published before 2000, so publication date cannot express how
 understanding changed across earlier missions: a 2015 explainer routinely discusses a 1976 result.
@@ -97,7 +221,7 @@ fell outside its window, and **15.7%** of the archive is re-dated. A date the sc
 is never overruled, because archive footage is full of retrospect. Three more provenance axes work
 the same way: `body_axis`, `clip_axis` and `mission_axis`.
 
-## Asking a question
+### Asking a question
 
 ```bash
 python scripts/ask.py --preset water-mars
@@ -136,7 +260,7 @@ Choices forced by measurement, not preference:
 The trace records every moment dropped with its reason, `below_threshold` with the score or
 `per_video_cap` with the cap. Rejects are what make the loop checkable.
 
-### Refusing to answer
+#### Refusing to answer
 
 Retrieval always returns something, so two gates run first. **Answerability:** given `zxqw
 plorbnak fleeming vootrix` the planner once split the gibberish into plausible sub-questions and
@@ -145,14 +269,14 @@ asked how NASA explored Venus, the agent once reasoned from Artemis reentry foot
 conceding no clip showed Venus. There are zero Venus scenes, and the check now ends the run in
 **19 seconds** with what the archive does cover.
 
-### The reel
+#### The reel
 
 `src/reel.py` uses the **v2 editor** exclusively. Moments are laid out on an integer-second
 timeline in era order, each with a `TextAsset` lower-third carrying the citation number, the year,
 how that year was determined, the mission and the NASA identifier. Provenance is burned into the
 frame, so it survives an export.
 
-## Interface
+### Interface
 
 A navigable solar system. Each retrieved moment stands on the body its scene concerns, rendered as
 the hardware the mission actually flew, and the camera moves through the decades as the reel plays.
@@ -192,57 +316,6 @@ python evals/answers.py data/answers       # answer gate
 python tests/test_era.py                   # and seven more suites
 cd web && npm test                         # scene placement, craft mapping
 ```
-
-## Testing
-
-Three layers, each catching what the one below cannot.
-
-**Offline unit tests** (`tests/`, run by CI on every push): reel shot mapping, era extraction, passage selection, mission metadata, speech alignment, coverage policy, and the ask service's HTTP front with a stubbed agent. No network, no key.
-
-**Web checks** (`web/scripts/`, run by CI): scene placement for every celestial body, craft mapping, and the browser-side run store.
-
-**TestSprite, on every pull request.** The suite lives in the TestSprite portal and runs in a cloud browser against the pull request's own Vercel preview, so the check on the PR is about that PR's code, not about main. The merge waits for it. What it covers, 34 browser tests:
-
-| Area | What is asserted |
-|---|---|
-| Presets | Each Start preset loads an answer, chronology, evidence and reel; switching presets replaces the loaded run and marks the active one |
-| Answer and chronology | Citation numbers map to evidence rows; chronology points are in ascending date order |
-| Evidence list | Rows render earliest era first; clicking a row changes the active moment and seeks the reel |
-| Evidence reel | The player loads the HLS stream, or says that the stream is slow or that the browser cannot decode it, with a link; a bare spinner is a failure |
-| Orrery | Clicking a body's name focuses it and opens the body panel with its counts; the sidebar shows the era range and the four provenance kinds |
-| Ask form | Empty input keeps submit disabled. The over-limit refusal is checked by the API suite below; typing 400+ characters is too slow for the browser runner to assert reliably, so the page-side note is verified headless instead (see PR #11) |
-| Saved runs | The Asked list shows its empty state in a fresh browser |
-| More presets | The water-and-ice and telescopes presets each load their own answer, with the active preset marked |
-| Citations | A citation number in the Chronology selects the evidence moment it cites; the timeline ruler has a needle per dated moment and clicking one selects it |
-| Folds | Evidence lists eight moments earliest first; Agent trace lists numbered steps from the question; Discarded says what was dropped by coverage policy and what fell below threshold |
-| Scene controls | Hide notes clears the side panels and show notes restores them; focusing a body flips the camera strip from following reel to manual orbit; clicking the same body name twice closes its panel; Mars and Earth panels show their counts and moments, and selecting a moment from the Mars panel changes the active one |
-| Body with no footage | Focusing Venus says there is no footage of it instead of loading forever |
-| Page chrome | Title, name and tagline; the Ask box's label, placeholder and disabled submit; typing enables submit and clearing disables it again |
-| Live ask | One real question goes through the ask service: running state, progress trace, an answer with chronology and evidence, saved to the browser, survives a reload, reopens without rerunning |
-
-**TestSprite API suite.** A second project, planned from [`docs/openapi.yaml`](docs/openapi.yaml) and probes of the live API, runs against the API itself: 51 tests, run automatically through a push trigger against the project's saved production environment. The pull-request trigger type does not work for API projects today (its runs start with no target URL and fail in under a second with a TestSprite-side internal error, reported to the team), so the browser suite carries the check on each PR and the API runs are listed in the portal. What it checks: every preset file's full shape (eight evidence rows in ascending era order, one reel shot per row, citations that point at rows, a reachable HLS manifest); the five presets are five different answers; `/api/ask` refuses invalid JSON, a missing or null question, whitespace-only input and anything past 400 characters with the exact documented bodies, as JSON, with no path, key or stack text, and never opens a stream; only POST is accepted; the body facts file covers every body the presets name; the ask service answers its health check, refuses a request with no token or a wrong one, and has no other routes; the served page contains no key names or service address; a question that is a number, array, object or boolean is a 400 with its own message, as are top-level bodies that are not objects, a 300 KB question, and a 401-character question in accents or emoji; every preset's trace is numbered from the question with known step kinds and non-decreasing times, its timeline is ascending decades, what it dropped is counted, its plan is saved, its moments are unique and its reel captions are numbered in order; HEAD works on preset files, the site icon is SVG, and unknown paths are real 404s.
-
-The live-ask test is the only one that spends VideoDB credits, and the visitor quota in `web/lib/ratelimit.ts` bounds it. What the suite caught is listed in full below.
-
-### What TestSprite caught
-
-Every row below was a failing check first, on a pull request or in the portal's run history, and then a passing one. None of these would have shown up in a manual pass: each needs a clean browser, a runner that types fast, a cold host or three requests in a row.
-
-| Found by | What was wrong | Fix |
-|---|---|---|
-| Browser suite, PR #8 | The planet names over the orrery were plain text on top of the picker sphere; clicking a name did nothing | The names are buttons that focus the body |
-| Browser suite, PR #8 | Once they were buttons, no click reached them: the label rule set `pointer-events: none` and the buttons inherited it | A more specific rule restores clicks; reproduced headless and verified before the push |
-| Browser suite, PR #8 | An over-limit question was only refused by the server after submit | The page counts characters live, disables submit, and says "question too long" |
-| Browser suite, PR #8 | The Asked list disappeared when empty, so a first visit showed no sign of where runs go | An empty row says so |
-| Browser suite, PR #8 | A browser without H.264 sat on "loading stream…" forever | The player says it cannot play the reel, or that the stream is slow, with a link |
-| Browser suite, PR #8 | On a CPU-rendered browser the 3D scene cost 53 ms a frame and every keystroke in the Ask box waited behind one | The scene draws at half resolution without antialiasing when the renderer is software; 17 ms a frame |
-| Browser suite, PR #11 | A long value set from code vanished from the Ask box: it was a controlled input, and React discards a value that arrives without an input event | The box is uncontrolled and the length is read from the field on submit |
-| API suite, PR #13 | The ask service checked the token before reading the body, so a 401 left the JSON unread and the next request on that connection was parsed from the leftover bytes | The service closes the connection after any refusal; a Python regression test fails without it |
-| Browser suite, PR #13 | Focusing Venus or Mercury left the body panel on "reading corpus summary…" forever: they have no footage, and the panel could not tell that from loading | A loaded summary with no entry says there is no footage of that body |
-| Browser suite, PR #13 | The first question after the free host slept failed with "ask service answered 502" | The route retries 502, 503, 504 and refused connections for up to 75 seconds and the trace says the host is starting up |
-| API suite, PR #16 | `/api/ask` answered 500 with an empty body when the question was a number, array, object or boolean: the route called `.trim()` on whatever the JSON held | Anything that is not text is `400 question must be text`, before the quota; four API tests failed against production first and pass after |
-
-PR #13 is the one to read for the pattern: its first commit is only the regression test, so CI and TestSprite both fail on it, and the second commit carries the fixes and turns both green.
 
 ## Setup
 
@@ -329,6 +402,9 @@ through untouched, so nothing in between sees a dead connection. The route's `ma
 300 seconds for the same reason. Sizing, measured rather than assumed: a full run peaks at
 **49 MB** of RSS for the agent, so two at once fit a 512 MB free instance with room to spare.
 
+<details>
+<summary>Operational notes: saved runs, cold starts, the old single-container deploy</summary>
+
 Saved runs live in the visitor's browser, in `localStorage`, and neither server keeps any
 history: the agent writes its result to a temp directory, the service streams it out, and the
 directory is deleted. The trade is that a run is private to the browser that asked for it and
@@ -340,6 +416,8 @@ is unaffected, because it never touches the service.
 
 The earlier single-container deployment, with the Next server spawning the agent in one tree, is
 kept on the `deploy/free` branch so its link keeps working.
+
+</details>
 
 ## Pipeline
 
@@ -366,6 +444,9 @@ rather than repeating paid work.
 Optional. The shipped collection is public and read-only, so querying the archive needs nothing
 but your own key. Rebuild it only to own the corpus outright: to re-run ingestion, change the
 schema, or index footage this selection left out.
+
+<details>
+<summary>The full rebuild procedure and what will differ</summary>
 
 What makes a rebuild faithful is `data/selection.json`, which pins the exact NASA ids, so the same
 87 clips are ingested again rather than approximated.
@@ -405,6 +486,8 @@ Nothing above is needed to read the shipped answers. The five presets in `data/a
 real pipeline output, and their reels stream from a public collection, so both work with no key
 at all.
 
+</details>
+
 ## Layout
 
 ```
@@ -414,7 +497,7 @@ web/     Next.js app, react-three-fiber orrery, SSE progress
 scripts/ discover, ingest, build, ask, refresh, probes, reporting
 evals/   gold.json, run.py retrieval gate, answers.py answer gate
 tests/   body, mission, era, coverage, passages, speech, reel
-docs/    architecture.svg, field-schema.md, quality-gate.md
+docs/    architecture.svg, field-schema.md, quality-gate.md, openapi.yaml, logo/, images/
 ```
 
 ## Architecture
