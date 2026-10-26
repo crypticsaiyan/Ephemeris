@@ -33,14 +33,21 @@ function sse(event: string, data: unknown): Uint8Array {
 }
 
 export async function POST(request: Request) {
-  let question = "";
+  let raw: unknown;
   try {
-    ({ question } = await request.json());
+    raw = (await request.json())?.question;
   } catch {
     return Response.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
-  question = (question ?? "").trim();
+  // JSON allows a number, an array, an object or a boolean where text belongs, and calling
+  // `.trim()` on any of those threw, which surfaced as a 500 with no body. Absent and null are
+  // "required"; anything else that is not text is its own refusal, so a client can tell them
+  // apart. Checked before the quota, like every other validation.
+  if (raw !== undefined && raw !== null && typeof raw !== "string") {
+    return Response.json({ error: "question must be text" }, { status: 400 });
+  }
+  let question = (raw ?? "").trim();
   if (!question) return Response.json({ error: "question is required" }, { status: 400 });
   if (question.length > 400) {
     return Response.json({ error: "question too long" }, { status: 400 });
