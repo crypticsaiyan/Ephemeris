@@ -123,6 +123,11 @@ export async function POST(request: Request) {
           throw new Error(detail);
         }
 
+        // A run outlasts any one connection, so the page is told the run's id first and picks it
+        // up again at `/api/ask/<id>?after=<events seen>` if this stream is cut or simply ends.
+        const job = upstream.headers.get("x-ask-job");
+        if (job) controller.enqueue(sse("job", { id: job }));
+
         // The service already speaks the browser's event format, keepalives included, so the
         // bytes pass through untouched.
         const reader = upstream.body.getReader();

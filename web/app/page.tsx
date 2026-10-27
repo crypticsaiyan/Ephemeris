@@ -22,6 +22,9 @@ const Orrery = dynamic(() => import("@/components/Orrery"), { ssr: false });
    different worlds, which is what stops a multi-domain archive reading as Mars-only.
    `telescopes` is last: the widest era span of the four, but every moment sits in deep space,
    so the orrery barely moves. */
+/** How many times one run may be picked up again; at forty seconds a go this outlasts any run. */
+const MAX_RECONNECTS = 30;
+
 /** Same ceiling as `/api/ask`, which answers 400 "question too long" past it. */
 const MAX_QUESTION = 400;
 
@@ -164,65 +167,101 @@ export default function Page() {
     const started = Date.now();
 
     try {
-      const response = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question: q }),
-      });
-
-      // A validation failure still comes back as plain JSON.
-      if (!response.ok && !response.headers.get("content-type")?.includes("event-stream")) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error ?? `request failed (${response.status})`);
-      }
-      if (!response.body) throw new Error("no response body");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+      let jobId = "";
+      let seen = 0; // events of the run already handled, so a reconnect asks only for the rest
       let answered = false;
+      let reconnects = 0;
 
-      // Minimal SSE reader: events are separated by a blank line, each carrying one
-      // `event:` name and one `data:` payload.
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      // One connection lasts about forty seconds and a run takes longer, and a long stream also
+      // gets cut by the network. Either way the run itself carries on, so the page asks for the
+      // rest by id until the answer or an error arrives.
+      while (!answered) {
+        let response: Response;
+        try {
+          response = jobId
+            ? await fetch(`/api/ask/${jobId}?after=${seen}`)
+            : await fetch("/api/ask", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ question: q }),
+              });
+        } catch (networkError) {
+          if (!jobId || ++reconnects > MAX_RECONNECTS) throw networkError;
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          continue;
+        }
 
-        let split = buffer.indexOf("\n\n");
-        while (split !== -1) {
-          const chunk = buffer.slice(0, split);
-          buffer = buffer.slice(split + 2);
-          split = buffer.indexOf("\n\n");
+        // A validation failure still comes back as plain JSON.
+        if (!response.ok && !response.headers.get("content-type")?.includes("event-stream")) {
+          if (jobId && response.status !== 404 && ++reconnects <= MAX_RECONNECTS) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            continue;
+          }
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error ?? `request failed (${response.status})`);
+        }
+        if (!response.body) throw new Error("no response body");
 
-          const name = /^event: (.*)$/m.exec(chunk)?.[1];
-          const raw = /^data: (.*)$/m.exec(chunk)?.[1];
-          if (!name || !raw) continue;
-          const data = JSON.parse(raw);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-          if (name === "progress") {
-            setProgress((steps) => [...steps, data]);
-          } else if (name === "error") {
-            throw new Error(data.error ?? "agent failed");
-          } else if (name === "result") {
-            const answerResult = data as AskResult;
-            setResult(answerResult);
-            setPreset("");
-            // Kept before anything else touches it. The server deleted its temp copy the moment
-            // it finished streaming this, so a failure to store here is the run being lost.
-            const id = localRunId(q);
-            setLanded({
-              seconds: Math.round((Date.now() - started) / 1000),
-              moments: answerResult.evidence?.length ?? 0,
-              id: saveRun(id, answerResult) ? id : undefined,
-            });
-            answered = true;
-            loadSavedList();
+        // Minimal SSE reader: events are separated by a blank line, each carrying one
+        // `event:` name and one `data:` payload.
+        for (;;) {
+          let chunk: ReadableStreamReadResult<Uint8Array>;
+          try {
+            chunk = await reader.read();
+          } catch (cut) {
+            if (!jobId) throw cut; // nothing to resume without an id
+            break;
+          }
+          const { done, value } = chunk;
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let split = buffer.indexOf("\n\n");
+          while (split !== -1) {
+            const block = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            split = buffer.indexOf("\n\n");
+
+            const name = /^event: (.*)$/m.exec(block)?.[1];
+            const raw = /^data: (.*)$/m.exec(block)?.[1];
+            if (!name || !raw) continue;
+            const data = JSON.parse(raw);
+
+            if (name === "job") {
+              jobId = data.id;
+              continue;
+            }
+            seen += 1;
+            if (name === "progress") {
+              setProgress((steps) => [...steps, data]);
+            } else if (name === "error") {
+              throw new Error(data.error ?? "agent failed");
+            } else if (name === "result") {
+              const answerResult = data as AskResult;
+              setResult(answerResult);
+              setPreset("");
+              // Kept before anything else touches it. The server deleted its temp copy the moment
+              // it finished streaming this, so a failure to store here is the run being lost.
+              const id = localRunId(q);
+              setLanded({
+                seconds: Math.round((Date.now() - started) / 1000),
+                moments: answerResult.evidence?.length ?? 0,
+                id: saveRun(id, answerResult) ? id : undefined,
+              });
+              answered = true;
+              loadSavedList();
+            }
           }
         }
-      }
 
-      if (!answered) throw new Error("the agent produced no answer");
+        if (answered) break;
+        if (!jobId) throw new Error("the agent produced no answer");
+        if (++reconnects > MAX_RECONNECTS) throw new Error("the run took too long to finish");
+      }
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       setError(detail);

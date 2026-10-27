@@ -31,12 +31,14 @@ import ask_service  # noqa: E402
 TOKEN = "test-token-0123456789"
 
 STUB = '''\
-import json, sys
+import json, sys, time
 question, flag, out = sys.argv[1], sys.argv[2], sys.argv[3]
 assert flag == "--json", flag
 print("@progress " + json.dumps({"n": 1, "kind": "decompose", "summary": "split " + question}), file=sys.stderr)
 print("not a progress line, just noise", file=sys.stderr)
 print("@progress " + json.dumps({"n": 2, "kind": "retrieve", "summary": "found"}), file=sys.stderr)
+if question == "slow":
+    time.sleep(1.5)
 if question == "fail":
     print("boom: the agent fell over", file=sys.stderr)
     sys.exit(3)
@@ -113,6 +115,40 @@ def main() -> None:
             assert got[0][1]["summary"] == "split water on mars", got[0]
             assert got[2][1]["answer"] == "stub answer to water on mars", got[2]
 
+            # A caller that was cut off picks the run up by job id and gets the rest, from where
+            # it stopped, with the same framing.
+            job = headers["x-ask-job"]
+            status, _, body = call(base, f"/ask/{job}?after=1", token=TOKEN)
+            assert status == 200, (status, body)
+            assert [e for e, _ in events(body)] == ["progress", "result"], events(body)
+            status, _, body = call(base, f"/ask/{job}?after=3", token=TOKEN)
+            assert status == 200 and events(body) == [], (status, body)
+            status, _, body = call(base, f"/ask/{job}?after=1")
+            assert status == 401, (status, body)
+            status, _, body = call(base, f"/ask/{'0' * 32}?after=0", token=TOKEN)
+            assert status == 404 and "unknown run" in body, (status, body)
+            status, _, body = call(base, f"/ask/{job}?after=x", token=TOKEN)
+            assert status == 400, (status, body)
+            status, _, body = call(base, "/ask/not-a-job", token=TOKEN)
+            assert status == 404, (status, body)
+
+            # A run longer than one connection is allowed to be: the first stream ends early
+            # without an answer, and reconnecting with the count of events seen finishes it.
+            ask_service.STREAM_SECONDS = 0.4
+            status, headers, body = call(base, "/ask", {"question": "slow"}, token=TOKEN)
+            first = events(body)
+            assert "result" not in [e for e, _ in first], first
+            job, seen, names = headers["x-ask-job"], len(first), [e for e, _ in first]
+            for _ in range(20):
+                if "result" in names:
+                    break
+                _, _, body = call(base, f"/ask/{job}?after={seen}", token=TOKEN)
+                more = events(body)
+                seen += len(more)
+                names += [e for e, _ in more]
+            assert names == ["progress", "progress", "result"], names
+            ask_service.STREAM_SECONDS = 40
+
             # A failed run ends in one error event carrying the agent's stderr, with secrets
             # scrubbed, and never a result.
             os.environ["VIDEO_DB_API_KEY"] = "boom: the agent fell over"
@@ -144,7 +180,7 @@ def main() -> None:
         finally:
             server.shutdown()
 
-    print("\nOK: health, auth, validation, stream framing, error redaction, fail-closed token")
+    print("\nOK: health, auth, validation, stream framing, resume by job id, error redaction, fail-closed token")
 
 
 if __name__ == "__main__":
