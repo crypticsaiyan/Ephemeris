@@ -5,6 +5,10 @@ also held the Python environment. This module is that spawn, moved behind one en
 app POSTs a question, this process runs the agent and streams the same event stream the route
 used to build, and nothing else changes shape. The browser never talks to this service directly.
 
+A run outlives the connection that started it. It is kept as a job: `POST /ask` streams its events
+for up to STREAM_SECONDS and names the job in `x-ask-job`, and `GET /ask/<job>?after=<n>` replays
+from event n, so a caller that was cut off, or simply reached the end of a segment, picks up again.
+
 Standard library only. The service runs at most two agents at once, and a run spends its time
 waiting on VideoDB rather than computing, so a threaded stdlib server is the right size.
 
@@ -21,12 +25,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "ask.py"
@@ -34,7 +42,13 @@ SCRIPT = ROOT / "scripts" / "ask.py"
 MAX_QUESTION = 400
 MAX_CONCURRENT = 2
 KEEPALIVE_SECONDS = 15
+# One connection never outlives this. A run takes minutes on a free host and a long-held stream
+# gets cut somewhere between here and the browser, so the run carries on in a job and the caller
+# reconnects with `GET /ask/<job>?after=<events seen>` until the answer arrives.
+STREAM_SECONDS = 40
+JOB_KEEP_SECONDS = 600
 PROGRESS_PREFIX = "@progress "
+JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
 # Taken, not waited on: a third ask is refused at once rather than queued, which is the
 # behaviour the web app's own limiter already promises its callers.
@@ -84,6 +98,52 @@ def run_agent(question: str, emit) -> None:
         emit("result", json.loads(out_path.read_text("utf8")))
 
 
+class Job:
+    """One run's events, kept so a caller that was cut off can pick up where it stopped."""
+
+    def __init__(self) -> None:
+        self.id = secrets.token_hex(16)
+        self.events: list[tuple[str, object]] = []
+        self.done = False
+        self.finished_at = 0.0
+        self.cond = threading.Condition()
+
+    def emit(self, event: str, data) -> None:
+        with self.cond:
+            self.events.append((event, data))
+            self.cond.notify_all()
+
+    def finish(self) -> None:
+        with self.cond:
+            self.done = True
+            self.finished_at = time.time()
+            self.cond.notify_all()
+
+
+_jobs: dict[str, Job] = {}
+_jobs_lock = threading.Lock()
+
+
+def _prune_jobs() -> None:
+    cutoff = time.time() - JOB_KEEP_SECONDS
+    with _jobs_lock:
+        for job_id in [k for k, j in _jobs.items() if j.done and j.finished_at < cutoff]:
+            del _jobs[job_id]
+
+
+def _run_job(job: Job, question: str) -> None:
+    """Runs the agent to the end whether or not anyone is still listening."""
+    try:
+        run_agent(question, job.emit)
+    except Exception as error:  # noqa: BLE001
+        raw = str(error)
+        sys.stderr.write(f"[ask-service] run failed: {raw}\n")
+        job.emit("error", {"error": redact(raw)})
+    finally:
+        job.finish()
+        _slots.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -108,19 +168,72 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _authorised(self) -> bool:
+        expected = os.environ.get("ASK_SERVICE_TOKEN", "")
+        return bool(expected) and self.headers.get("x-service-token", "") == expected
+
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in ("/", "/healthz"):
+        url = urlsplit(self.path)
+        if url.path in ("/", "/healthz"):
             self._json(200, {"ok": True, "service": "ephemeris-ask"})
-        else:
+            return
+
+        match = re.fullmatch(r"/ask/([0-9a-f]{32})", url.path)
+        if not match:
             self._json(404, {"error": "not found"})
+            return
+        if not self._authorised():
+            self._json(401, {"error": "unauthorised"})
+            return
+        with _jobs_lock:
+            job = _jobs.get(match.group(1))
+        if job is None:
+            self._json(404, {"error": "unknown run"})
+            return
+        try:
+            after = max(0, int(parse_qs(url.query).get("after", ["0"])[0]))
+        except ValueError:
+            self._json(400, {"error": "after must be a number"})
+            return
+        self._stream(job, after)
+
+    def _stream(self, job: Job, after: int) -> None:
+        """Sends the job's events from `after` on, then ends, so the caller reconnects for more."""
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream; charset=utf-8")
+        self.send_header("cache-control", "no-cache, no-transform")
+        self.send_header("x-ask-job", job.id)
+        # No length up front, so closing the connection is what ends the stream.
+        self.send_header("connection", "close")
+        self.close_connection = True
+        self.end_headers()
+
+        deadline = time.time() + STREAM_SECONDS
+        sent = after
+        try:
+            while True:
+                with job.cond:
+                    if sent >= len(job.events) and not job.done:
+                        job.cond.wait(timeout=min(KEEPALIVE_SECONDS, max(0.0, deadline - time.time())))
+                    pending = job.events[sent:]
+                    finished = job.done and sent + len(pending) >= len(job.events)
+                chunk = "".join(
+                    f"event: {event}\ndata: {json.dumps(data)}\n\n" for event, data in pending
+                ) or ": keepalive\n\n"
+                self.wfile.write(chunk.encode())
+                self.wfile.flush()
+                sent += len(pending)
+                if finished or time.time() >= deadline:
+                    return
+        except OSError:
+            return  # the caller went away; the run does not need it
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/ask":
             self._json(404, {"error": "not found"})
             return
 
-        expected = os.environ.get("ASK_SERVICE_TOKEN", "")
-        if not expected or self.headers.get("x-service-token", "") != expected:
+        if not self._authorised():
             self._json(401, {"error": "unauthorised"})
             return
 
@@ -142,52 +255,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(429, {"error": "too many runs in progress"}, {"retry-after": "60"})
             return
 
-        try:
-            self.send_response(200)
-            self.send_header("content-type", "text/event-stream; charset=utf-8")
-            self.send_header("cache-control", "no-cache, no-transform")
-            # The body has no length up front, so closing the connection is what tells the
-            # caller the stream is over. Keep-alive here would leave the web app waiting
-            # for an end that never comes.
-            self.send_header("connection", "close")
-            self.close_connection = True
-            self.end_headers()
-
-            lock = threading.Lock()
-
-            def write(chunk: str) -> None:
-                with lock:
-                    self.wfile.write(chunk.encode())
-                    self.wfile.flush()
-
-            def emit(event: str, data) -> None:
-                write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
-
-            # Retrieval and synthesis are long silences, and a proxy reads silence as a dead
-            # connection. An SSE comment keeps bytes flowing and the client ignores it.
-            stop = threading.Event()
-
-            def heartbeat() -> None:
-                while not stop.wait(KEEPALIVE_SECONDS):
-                    try:
-                        write(": keepalive\n\n")
-                    except OSError:
-                        return
-
-            threading.Thread(target=heartbeat, daemon=True).start()
-            try:
-                run_agent(question, emit)
-            except Exception as error:  # noqa: BLE001
-                raw = str(error)
-                sys.stderr.write(f"[ask-service] run failed: {raw}\n")
-                try:
-                    emit("error", {"error": redact(raw)})
-                except OSError:
-                    pass
-            finally:
-                stop.set()
-        finally:
-            _slots.release()
+        _prune_jobs()
+        job = Job()
+        with _jobs_lock:
+            _jobs[job.id] = job
+        threading.Thread(target=_run_job, args=(job, question), daemon=True).start()
+        self._stream(job, 0)
 
 
 def main() -> None:
